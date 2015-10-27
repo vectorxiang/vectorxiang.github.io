@@ -15,9 +15,11 @@ categories: [network]
 
 ###system call interface
 系统调用接口是用户空间的应用程序正常访问内核的唯一合法途径（终端和陷入也可访问内核）。如:
+
 ```c
 	asmlinkage long sys_socket(int, int, int);
 ```
+
 系统调用一般由sys开头 ，前面的修饰符是asmlingkage，表示函数由堆栈获得参数。
 
 ###protocol agnositic interface
