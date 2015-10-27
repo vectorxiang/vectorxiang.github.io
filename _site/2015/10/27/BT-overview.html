@@ -6,12 +6,12 @@
 <meta name="google-site-verification" content="5KH7Y5MF1c9GbPNQ94CEej-1YkeHortoXv7fjiWt7hM" />
 <meta charset="utf-8">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
-<title>Vector's Blog</title>
+<title>Bluetooth Overview</title>
 <link rel="shortcut icon" href=" /img/github.ico"/>
 <link rel="bookmark" href="/img/github.ico"/>
 <meta name="viewport" content="width=device-width">
 <meta name="description" content="Python,HTML,CSS,Machine Leaning">
-<link rel="canonical" href="/">
+<link rel="canonical" href="/2015/10/27/BT-overview.html">
 <!-- Custom CSS -->
 <link rel="stylesheet" href="/css/main.css">
 <link rel="stylesheet" href="/css/github.css">
@@ -67,21 +67,47 @@ ga('send', 'pageview');
 
         <div class="page-content">
             <div class="wrap">
-                <div class="home">
-  
-  <ul class="posts">
-    <!-- <li class="listing-seperator">Yesterday you said tomorrow</li> -->
-  
-  
-    
-    
-    <li class="listing-item">
-      <time datetime="2015-10-27">2015-10-27</time>
-      <a href="/2015/10/27/BT-overview.html" title="Bluetooth Overview">Bluetooth Overview</a>
-    </li>
-  
-    <li class="listing-seperator"><a href="/archive/">Long ago</a></li>
-  </ul>
+                <div class="post">
+    <header class="post-header">
+        <h1><a href="/2015/10/27/BT-overview.html">Bluetooth Overview</a></h1>
+        <p class="meta"><i class="fa fa-calendar"></i> 2015-10-27&nbsp&nbsp&nbsp<i class="fa fa-folder-open"></i>&nbsp&nbsp&nbsp<i class="fa fa-tags"></i>&nbsp</p>
+    </header>
+    <article class="post-content">
+        <h1>RADIO SPECIFICATION</h1>
+
+<h3>1. 工作频段</h3>
+
+<p>蓝牙工作在2.4G的频段。RF通道就是我们通常说的传输的通道，它一共有79个通道，从2.402GHz开始，每隔1MHz有一个RF通道。</p>
+
+<p><img src="/picture/bt_band.png" alt="bt band"></p>
+
+<p>蓝牙采用跳频技术 (Frequency-Hopping Spread Spectrum)，將時間切成一段一段的時槽，每个时槽的长度为625μs ， 每換一時槽即換一頻道 ，其跳頻速率為<strong>1600(=1000000微秒/625微秒)hops/sec</strong> （注意：在page 和 Inquiry 跳频为 3200跳/s） 。其主要目的是避免干扰和安全考虑 。蓝牙网络中依据master的mac地址和Clock来决定一个伪随机跳频序列，整个网络上的设备根据这个序列同时切换通道。</p>
+
+<h3>2. 传输速度</h3>
+
+<ul>
+<li>Basic Rate : 721.2 kbps</li>
+<li>Enhanced Data Rate : 2.1 Mbps</li>
+<li>High speed : 24 Mbps</li>
+</ul>
+
+<h3>2. 传输功率</h3>
+
+<p><img src="/picture/bt_power_class.png" alt="bt_power_class"></p>
+
+<h1>BASEBAND SPECIFICATION</h1>
+
+<h3>1. 时钟</h3>
+
+<p>蓝牙的时钟为<font color=red>3.2kHz</font>。就使用的时钟而言，master就是使用的它的native的时钟，而slave则是在它的native时钟上加上对应的offset得到和master同步的时钟。这个offset是在inquiry过程中交互得到的。为了防止时钟的偏移，slave在每次收到master的packet的时候都需要刷新offset。
+<img src="/picture/bt_clock.png" alt="bt_clock"></p>
+
+    </article>
+    <!-- Duoshuo Comment BEGIN -->
+    <div id="comments">
+        <div class="ds-thread" data-thread-key="/2015/10/27/BT-overview"  data-title="Bluetooth Overview - Vector's Blog"></div>
+    </div>
+<!-- Duoshuo Comment END -->
 </div>
 
             </div>
