@@ -13,7 +13,7 @@ categories: [Bluetooth]
 ![bt band](/picture/bt_band.png)
 
 
-蓝牙采用跳频技术 (Frequency-Hopping Spread Spectrum)，將時間切成一段一段的時槽，每个时槽的长度为625μs ， 每換一時槽即換一頻道 ，其跳頻速率為**1600(=1000000微秒/625微秒)hops/sec** （注意：在page 和 Inquiry 跳频为 3200跳/s） 。其主要目的是避免干扰和安全考虑 。蓝牙网络中依据master的mac地址和Clock来决定一个伪随机跳频序列，整个网络上的设备根据这个序列同时切换通道。
+蓝牙采用跳频技术 (Frequency-Hopping Spread Spectrum)，將時間切成一段一段的時槽，每个时槽的长度为625μs ， 每換一時槽即換一頻道 ，其跳頻速率為**1600hops/sec(=1000000微秒/625微秒)**（注意：在page 和 Inquiry 跳频为 3200跳/s） 。其主要目的是避免干扰和安全考虑 。蓝牙网络中依据master的mac地址和Clock来决定一个伪随机跳频序列，整个网络上的设备根据这个序列同时切换通道。
 
 ###2. 传输速度
 * Basic Rate : 721.2 kbps
