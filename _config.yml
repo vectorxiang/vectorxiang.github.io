@@ -14,12 +14,6 @@ markdown: redcarpet
 redcarpet:
   extensions: [fenced_code_blocks,no_intra_emphasis,strikethrough,no_intra_emphasis,autolink,tables]
 
-#duoshuo
-  comments :
-    provider : duoshuo
-    duoshuo :
-      short_name : taizilongxu
-
 navigations:
   - title: 分类
     class: fa fa-user
