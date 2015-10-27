@@ -20,10 +20,20 @@ categories: [Bluetooth]
 * Enhanced Data Rate : 2.1 Mbps
 * High speed : 24 Mbps
 
-###2. 传输功率
+###3. 传输功率
+蓝牙的传输功率分为3个级别，通常情况下传输距离分别在100、10、1米范围内。
 ![bt_power_class](/picture/bt_power_class.png)
 
 #BASEBAND SPECIFICATION
 ###1. 时钟
 蓝牙的时钟为<font color=red>3.2kHz</font>。就使用的时钟而言，master就是使用的它的native的时钟，而slave则是在它的native时钟上加上对应的offset得到和master同步的时钟。这个offset是在inquiry过程中交互得到的。为了防止时钟的偏移，slave在每次收到master的packet的时候都需要刷新offset。
+
 ![bt_clock](/picture/bt_clock.png)
+
+###2. 蓝牙设备地址
+每一个蓝牙设备都会被分配唯一一个48位bt_addr，该地址的结构如下图，其中分为LAP(24位地址低端部分)、UAP(8位地址高端部分)和NAP(16位无意义地址部分)。<font color=red>其中,NAP和UAP是生产厂商的唯一标识码，必须由蓝牙权威部门分配给不同的厂商</font>，而LAP是由厂商内部自由分配。
+>其中NAP和UAP可以在[IEEE](http://standards-oui.ieee.org/oui.txt)查询到
+
+![bt_addr](/picture/bt_addr.png)
+
+

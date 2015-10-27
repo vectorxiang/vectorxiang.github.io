@@ -91,16 +91,28 @@ ga('send', 'pageview');
 <li>High speed : 24 Mbps</li>
 </ul>
 
-<h3>2. 传输功率</h3>
+<h3>3. 传输功率</h3>
 
-<p><img src="/picture/bt_power_class.png" alt="bt_power_class"></p>
+<p>蓝牙的传输功率分为3个级别，通常情况下传输距离分别在100、10、1米范围内。
+<img src="/picture/bt_power_class.png" alt="bt_power_class"></p>
 
 <h1>BASEBAND SPECIFICATION</h1>
 
 <h3>1. 时钟</h3>
 
-<p>蓝牙的时钟为<font color=red>3.2kHz</font>。就使用的时钟而言，master就是使用的它的native的时钟，而slave则是在它的native时钟上加上对应的offset得到和master同步的时钟。这个offset是在inquiry过程中交互得到的。为了防止时钟的偏移，slave在每次收到master的packet的时候都需要刷新offset。
-<img src="/picture/bt_clock.png" alt="bt_clock"></p>
+<p>蓝牙的时钟为<font color=red>3.2kHz</font>。就使用的时钟而言，master就是使用的它的native的时钟，而slave则是在它的native时钟上加上对应的offset得到和master同步的时钟。这个offset是在inquiry过程中交互得到的。为了防止时钟的偏移，slave在每次收到master的packet的时候都需要刷新offset。</p>
+
+<p><img src="/picture/bt_clock.png" alt="bt_clock"></p>
+
+<h3>2. 蓝牙设备地址</h3>
+
+<p>每一个蓝牙设备都会被分配唯一一个48位bt_addr，该地址的结构如下图，其中分为LAP(24位地址低端部分)、UAP(8位地址高端部分)和NAP(16位无意义地址部分)。<font color=red>其中,NAP和UAP是生产厂商的唯一标识码，必须由蓝牙权威部门分配给不同的厂商</font>，而LAP是由厂商内部自由分配。</p>
+
+<blockquote>
+<p>其中NAP和UAP可以在<a href="http://standards-oui.ieee.org/oui.txt">IEEE</a>查询到</p>
+</blockquote>
+
+<p><img src="/picture/bt_addr.png" alt="bt_addr"></p>
 
     </article>
     <!-- Duoshuo Comment BEGIN -->
