@@ -13,7 +13,7 @@ categories: [network]
 
 最上面是用户空间层，或称为**应用层**，其中定义了网络栈的用户。底部是**物理设备**，提供了对网络的连接能力（串口或诸如以太网之类的高速网络）。中间是内核空间，即网络子系统，也是需要重点学习的地方。
 
-###system call interface
+###系统调用接口
 系统调用接口是用户空间的应用程序正常访问内核的唯一合法途径（终端和陷入也可访问内核）。如:
 
 ```c
@@ -22,9 +22,15 @@ categories: [network]
 
 系统调用一般由sys开头 ，前面的修饰符是asmlingkage，表示函数由堆栈获得参数。
 
-###protocol agnositic interface
-socket 层是一个协议无关接口，它提供了一组通用函数来支持各种不同协议。socket层不但可以支持典型的TCP和UDP协议，而且还可以支持IP、裸以太网和其他传输协议，例如SCTP（Stream Control Transmission Protocol）。
+###协议无关接口
+socket层是一个协议无关接口，它提供了一组通用函数来支持各种不同协议。socket层不但可以支持典型的TCP和UDP协议，而且还可以支持IP、裸以太网和其他传输协议，例如SCTP（Stream Control Transmission Protocol）。
 
-通过网络栈进行的通信都需要对 socket 进行操作。Linux 中的 socket 结构是 struct sock ，这个结构是在linux/include/net/sock.h中定义的。这个巨大的结构中包含了特定 socket 所需要的所有状态信息，其中包括 socket 所使用的特定协议和在 socket 上可以执行的一些操作。
+通过网络栈进行的通信都需要对socket进行操作。Linux中的socket结构是 struct sock ，这个结构是在linux/include/net/sock.h中定义的。这个巨大的结构中包含了特定socket所需要的所有状态信息，其中包括socket所使用的特定协议和在socket上可以执行的一些操作。
 
-网络子系统可以通过一个定义了自己功能的特殊结构来了解可用协议。每个协议都维护了一个名为 proto 的结构（可以在 linux/include/net/sock.h 中找到）。这个结构定义了可以在从 socket 层到传输层中执行特定的 socket 操作
+网络子系统可以通过一个定义了自己功能的特殊结构来了解可用协议。每个协议都维护了一个名为 proto 的结构（可以在 linux/include/net/sock.h 中找到）。这个结构定义了可以在从socket层到传输层中执行特定的socket操作（例如，如何创建一个socket，如何使用 socket 建立一个连接，如何关闭一个socket等等）。
+
+###网络协议
+网络协议这一层对一些可用的特定网络协议作出了定义（例如 TCP、UDP 等）。它们都是在 linux/net/ipv4/af_inet.c 文件中一个名为 inet_init 的函数中进行初始化的（因为 TCP 和 UDP 都是 inet 簇协议的一部分）。这些协议接口每个都按照类型和协议映射到 inetsw_array，该数组将内嵌协议与操作映射到一起，以实现不同协议的不同操作。
+
+###设备无关接口
+设备无关接口是由net_device实现的。任何设备和上层通信都是通过net_device设备无关接口。它将协议层与具有很多各种不同功能的硬件设备连接在一起。这一层提供了一组通用函数供底层网络设备驱动程序使用，让它们可以对高层协议栈进行操作。
