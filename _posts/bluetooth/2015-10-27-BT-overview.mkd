@@ -53,6 +53,74 @@ Physical Channel是piconet区分的标准，它是蓝牙系统结构层次中的
 ![bt_rf_slot](/images/bluetooth/bt_rf_slot.png)
 从目前来看，各种packet type所占的slot只有三种，分别占1,3,5个slot，暂未有偶数个的slot的packet出现。另外，需要注意的是master的tx需要在奇数个的slot开始，rx必须在偶数个的slot开始。也就是说 master 使用偶数 slot 传输，slave 使用奇数 slot 传输。
 
+inquiry 和 page scan channel 与上面最大的不同之处在于为了更好地利用时间，他不是625μs才发送一次，而是在625μs中发送了两次，也就是312.5μs发送一次，这也是蓝牙clk最小的时间间隔了。于是从master的角度来看，我们可以看到的内容就如下图所示了。
+![bt_page_channnel](/images/bluetooth/bt_page_channel.png)
+
+##4. 逻辑传输
+一个master在同一个物理通道上是可以对应多个slave的。在逻辑层，是通过一个称之为“逻辑传输地址”（LT_ADDR）来进行区分各个slave的。它的长度是3个bit，全0是用来广播的。因为是用来区分slave的，所以只有slave才有这个地址，master是没有的。需要注意的是这个地址只有在slave活跃的时候才有效，当他断开或者parked的时候，这个地址就立即没有了。
+
+目前来看一共有5种类型的逻辑传输层位于物理链路上。他们分别是：
+
+1. SCO:Synchronous Connection-Oriented    即面向连接的同步逻辑传输,用来传输语音等对时间比较敏感的数据信息的
+2. eSCO:Extended Synchronous Connection-Oriented    扩展的面向连接的同步逻辑传输,<font color=red>支持重传</font>
+3. ACL:Asynchronous Connection-Oriented    面向连接的异步逻辑传输
+4. ASB:Active Slave Broadcast    活跃的slave广播逻辑传输
+5. PSB: ParkedSlave Broadcast    ​休眠的slave关闭逻辑传输
+6. CSB: Connectionless Slave Broadcast (CSB) logical transport.
+
+##5. PACKETS
+数据包的格式根据 base rate 和 enhanced data rate 又有不同。
+**Basic Rate：**
+![bt_br_packet](/images/bluetooth/bt_br_packet.png)   
+<font color=orange>ACCESS CODE</font> : 长度是68或者72bit，当HEADER域没有的话就是68，否则就是正常的72bit。他是用来同步和DC偏移补偿的。更通俗地来讲他是同一个piconet上的标志，也就是一个piconet上（即同一个物理通道上）传输的packet的ACCESS CODE是相同的。其中Access Code又分为3种 :
+
+![bt_access_code](/images/bluetooth/bt_access_code.jpg)
+
+<font color=orange>HEADER </font>: 包含用于链路控制的信息   
+<font color=orange>PAYLOAD </font>: 就是信息内容，他的大小最大是2745bit。
+
+总得来说，一个Basic Rate的packet可以由上面三者的以下组合组成：  
+1)ACCESS CODE;2)ACCESS COED + HEADER; 3)ACCESS CODE + HEADER + PAYLOAD;
+
+**Enhanced Data Rate ：**
+![](/images/bluetooth/bt_edr_packet.png)
+这里的ACCESS CODE和HEADER是和Basic Rate一样的。事实上，我们可以理解为后面的都是payload的部分，只不过在payload部分，我们强制使用了一些头和尾的内容。   
+<font color=orange>Guard</font>：保护间隔，它要来表示HEADER的结尾到SYNC开始之间的时间。范围是4.75μs到5.25μs。   
+<font color=orange>Sync</font>：同步序列，DPSK使用的同步序列。   
+<font color=orange>Enhanced data rate payload</font>：对应的负载。    
+<font color=orange>Trailer</font>：payload的尾，其实他们都是0，对π/4 DQPSK调制而言是0000，对8DPSK的调制而言是000,000.   
+
+下面再来看一下Header 的结构：
+![](/images/bluetooth/bt_header_packet.png)   
+Header域包含了很多链路控制的信息，不过总得来说，可以总结为6个部分：   
+<font color=orange>LT_ADDR</font> : 3bit的逻辑传输地址，他是用来表示master是把这个包发给哪一个slave的。或者这个包是从哪个slave发送过来的。   
+<font color=orange>TYPE</font> : 表示packet的类型   
+<font color=orange>FLOW</font> : 是流控位，只有在ACL逻辑传输的时候才会使用，当RX buffer满的时候，就会把这个位置0，表示stop。当buffer又空了之后，就会把这个位置为1告诉TX可以继续发送了。需要注意的是ACL-C以及SCO,ESCO是不能使用这个位的。   
+<font color=orange>ARQN </font>: 是用来告知tx放，payload是成功传输的，就是通过了CRC校验。   
+<font color=orange>SEQN</font> : 就是数据流的sequence number。   
+<font color=orange>HEC </font>: 就是前向纠错。  
+
+根据 TYPE 和 逻辑传输的类型就可以获得该 packet 的类型 。  
+![](/images/bluetooth/bt_packet_type.png)  
+下面主要介绍5个common packet type， 这几种Type称为Link control packets：     
+<font color=orange>ID Packet</font>：这个packet就是上文提到的只有ACCESSCODE那一种packet。我们之后提到的inquiry msg就是一个ID Packet。       
+<font color=orange>NULL Packet</font>：这个packet只有ACCESS CODE和HEADER。一般来说他是用来返回链路信息的，比如什么rx buffer状态，或者ARQN之类的。他不需要对端的确认。    
+<font color=orange>POLL Packet</font>：和NULL Packet是类似的，比较大的差别就在于它需要对端回确认信息。需要注意的是不能会POLL Packet，否则就没玩没了。   
+<font color=orange>FHS Packet</font>：这个包的特别之处在于他包含了发送的clk信息和address信息，在page等开始的同步过程中起到了很大的作用。   
+<font color=orange>DM1 Packet</font>：这个packet的特别之处在于所有逻辑链路的控制信息都需要允许这种包，不过他也能传输data，不过仅限于ACL链路中，从一定程度上来说，可以认为他是一种ACL的packet。
+其他类型的 packet 类型大概可以分为   
+（1）SCO Packets   
+HV1 Packet， HV2 Packet， HV3 Packet，DVPacket。   
+（2）eSCO packet  
+EV4、EV5  for Basic Rate   
+2-EV3,3-EV3,2-EV5,3-EV5 for Enhanced Data Rate    
+（3）ACL Packrt    
+DM1, DH1, DM3, DH3, DM5, DH5 and AUX1 for basic Rate   
+2-DH1, 3-DH1, 2-DH3, 3-DH3, 2-DH5 and 3-DH5 for Enhanced DataRate    
+
+
+
+
 
 
 
