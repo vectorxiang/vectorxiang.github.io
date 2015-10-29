@@ -1,6 +1,6 @@
 ---
 layout: post
-title: "(转)socket接口的网络协议无关性"
+title: "socket接口的网络协议无关性 (转)"
 description:
 category: network
 tags: [network, linux]
