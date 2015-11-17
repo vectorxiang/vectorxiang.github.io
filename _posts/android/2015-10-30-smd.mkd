@@ -1,0 +1,18 @@
+---
+layout: post
+title:  "smd"
+date:   2015-10-27
+categories: [android]
+---
+>在Qualcomm的处理器中会包含多个subsystem，这些subsytem会由个别子处理器来运行。这些子处理器之间的通讯的主要方式就是共享内存(share memery)。
+
+共享内存是多核通信的基础，其实现主要包括3个部分： 
+  
+* SMD (Shared Memory Driver)，共享内存驱动，用于多核之间的数据通信    
+* SMSM (Shared Memory State Machine)，共享内存状态机，用于多核之间的状态通信       
+* SMEM (Shared Memory Manager)，共享内存管理器，是一個底層的協議，是物理RAM共享內存的管理接口，是SMD和SMSM的基礎  
+
+SMEM 具有兩種分配模式：動態SMEM 和靜態SMEM，動態SMEM 根據需要實時分配，靜態SMEM則會預先分配。    
+
+
+

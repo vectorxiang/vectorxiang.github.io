@@ -1,0 +1,25 @@
+---
+layout: post
+title:  "Android bluedroid"
+date:   2015-11-10
+categories: [bluetooth]
+---
+Android 4.2之前，Google一直使用的是Linux官方蓝牙协议栈BlueZ。BlueZ实际上是由高通公司在2001年5月基于GPL协议发布的一个开源项目，做为Linux 2.4.6内核的官方蓝牙协议栈。
+从Android 4.2开始，Google便在Android源码中推出了它和博通公司一起开发的BlueDroid以替代BlueZ。
+
+bluedroid源码结构如下图 ：
+![](/images/bluetooth/bluedroid_files.png)  
+先来解释一下其中的部分名词      
+**BTIF** : Bluetooth Interface     
+**BTU** : Bluetooth Upper Layer  
+**BTM** : Bluetooth Manager  
+**BTE** : Bluetooth embedded system   
+**BTA** : Blueetooth application layer    
+**CO** : call out\CI: call in   
+
+bluedroid的框架可以总结为下图 
+![](/images/bluetooth/bluedroid_architecture.png)  
+
+最上层为btif, 这一层提供提供整个bluedroid对外的接口，例如，android的 bluetooth apk的jni层就是直接调用的它的接口。
+
+

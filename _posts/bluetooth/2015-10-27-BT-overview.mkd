@@ -18,7 +18,7 @@ categories: [Bluetooth]
 ##2. 传输速度
 蓝牙的调制方式分为 Basic Rate 和 Enhanced Data Rate ,其中前者是必须实现的。另外 Enhanced Data Rate 使用 PSK 调制方式有两个变种 ： π/4-DQPSK 和 8DPSK 。他们的数据传输数度分别为：
 
-* Basic Rate : **1Mbps**
+* Basic Rate : GFSK **1Mbps**
 * Enhanced Data Rate :π/4-DQPSK 为 **2Mbps**，8DPSK 为 **3Mbps**
 
 蓝牙3.0+HS 集成802.11PAL最高速度可达*24Mbps*，是2.0速度的8倍。

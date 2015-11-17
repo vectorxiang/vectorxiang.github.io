@@ -1,0 +1,16 @@
+---
+layout: post
+title:  "Android M bluetooth update"
+date:   2015-11-6
+categories: [bluetooth]
+---
+#新特性    
+新支持的profile : SAP(SIM access profile)   
+
+另外原有的profile也支持新的特性：  
+同时保持连接两台A2DP Sink 设备
+同时保持连接两台AVRCP controllers设备
+
+>虽然是连接两台设备，但同时只能有一台设备收听音乐，收听音乐的设备可以在这两台已连接设备之间切换。
+
+
