@@ -1,0 +1,250 @@
+---
+layout: post
+title:  "BLE 之 ATT 介绍"
+date:   2015-11-17
+categories: [bluetooth]
+---
+#1. 介绍
+蓝牙4.0版本推出了低功耗规范，引入了两个核心协议：ATT（Attribute Protocol）和GATT（Generic Attribute Protocol）.这两个协议主要目标是BLE，但是也可以运行在传统蓝牙上（BR/EDR).
+
+ATT is a wire application protocol ， GATT 是基于 ATT 协议，而所有的 BLE profile 一定是基于 GATT。
+
+ATT定义了两种角色: 服务端(Server)和客户端(Client)                
+ATT允许设备作为服务端提供拥有关联值的属性集让作为客户端的设备来发现、读、写这些属性，另外服务端能主动通知客户端。
+
+#2. 组成
+ATT 协议的基础是属性(attribute)，每个属性由三个元素构成 ：    
+
+* Attribute Handle     : 用来访问Attribute Value   
+* Attribute Type       : 由UUID(Universally Unique IDentifier)来定义   
+* A set of Permissions : 控制是否该Attribute可读、可写、属性值是否通过加密链路发送  
+
+一个设备可以同时拥有Server和Client,而一个Server可以支持多个Client
+
+###Attribute Type
+Attribute Type由UUID唯一指定，UUID是一个128-bit值.在使用过程中，为了提高效率，使用的是16-bits Attribute UUID :     
+128-bit UUID        = 16-bit Attribute UUID*2^96 + Bluetooth_Base_UUID     
+Bluetooth_Base_UUID = 00000000-0000-1000-8000-00805F9B34FB    
+###Attribute Handle
+Attribute Handle是由Server分配的一个唯一且非零16-bit值    
+0x0000 保留，不能使用     
+0xFFFF 为最大 Attribute Handle 的最大值    
+###Attribute Handle Grouping
+Grouping是一由高层协议定义的一组属性，他们位于这一系列grouped 属性之前。     
+client 可以请求第一个和最后一个与属性组关联的Handle     
+###Attribute Value
+Attribute Value 为字节组，长度可以为1个字节或可变。    
+一个 Attribute Value 可能由于长度比较长而无法由单独一个 PDU 传输， 可以使用多个 PDUs 来传输。   
+###Attribute Permissions
+每个属性都有一组与之相关联的Permission Values    
+一个给定属性的权限由高层协议定义，并对ATT不可见   
+
+当访问一个安全属性需要一个认证的链路，而Client没有足够的权限 ，Server则响应一个Error Code(Insufficient Authentication) ，Client收到Error Code后应该尝试认证该链路，成功后即可访问该安全属性   
+
+当访问一个安全属性需要一个加密的链路，而链路没有加密 ，Server则响应一个Error Response(Insufficient Encryption) ，Client收到Error Response后应该尝试加密该链路，成功后即可访问该安全属性
+
+当访问一个安全属性需要一个加密的链路 ，当前链路有加密，但是对于所需要的安全级别来说加密Key Size太短时， Server则响应一个Error Code(Insufficient Encryption Key Size) ，Client收到Error Response后应该尝试使用更长的Key Size加密该链路，成功后即可访问该安全属性
+
+Attribute Permissions由下列三个权限组合而成：      
+                        
+- Access Permissions         : 决定Client是否可读、写属性值          
+ * Readable      
+ * Writable       
+ * Readable and Writable      
+- Authentication Permissions : 决定是否需要一个认证的物理链路(Authenticated Physical Link)         
+ * Authentication Required      
+ * No Authentication Required       
+- Authorization Permssions   : 决定Client在访问属性值前是否需要授权           
+ * Authorization Required       
+ * No Authorization Required     
+
+###Control-Point Attribute
+不可读、可写、可通知(Notified)和可指示(Indicated)的属性被称为Control-Point Attribute       
+高层协议可使用该属性来使能设备特定过程，比如设备上一个给定过程的命令或指示已经完成 
+###Protocol Methods
+TT使用Protocol Methods来发现、读、写、通知、指示属性 
+方法可分为如下几种 
+
+- Request 
+- Response 
+- Command 
+- Notification 
+- Indication 
+- Confirmation     
+
+一些ATT PDUs包含一个认证签名(Authentication Signature) ，允许PDU发送端不需要加密
+这些方法和符号位被称为opcode
+
+###Exchanging MTU Size
+ATT_MTU定义了Client和Server之间数据包的最大值, 其默认值由高层协议来定义 
+
+Client和Server可通过Exchange MTU Request and Response PDUs来获取最大可以接收的数据包大小，然后双方均使用交换值中的最小值进行通信
+
+同时作为Server和Client的设备应该使用相同的Client Rx MTU和Server Rx MTU
+
+###Long Attribute Value
+在单一数据包中可发送最长的属性大小为[ATT_MTU –1] octets 
+在一个Attribute PDU中至少包含Attribute Opcode
+
+属性值比[ATT_MTU-1] octets大时属性称为Long Attribute
+
+对于Long Attribute 
+          
+- 使用Read Blob Request来读取整个属性(Attribute > [ATT_MTU-1] octets) 
+- 使用Prepare Write Request和Execute Write Request来写整个属性(Attribute > [ATT_MTU-3] octets)
+
+ATT无法决定属性值是否大于[ATT_MTU] octets , 由高层协议决定
+
+最大的属性值为512 octets
+
+###Atomic Operations
+Server应该将Client的每个请求或命令视为不受影像的原子操作 
+如果一个链路由于某种原因断开，高层协议应当对属性值得修改负责
+
+Long Attribute不能被单一的原子操作读、写
+
+#3. Attribute PDU
+Attribute PDUs有六种类型 
+
+- Requests      : Client->Server, 请求回应 
+- Responses     : Server->Client, 响应请求. 
+- Commands      : Client->Server, 命令 
+- Notifications : Server->Client, 服务端通知 
+- Indications   : Server->Client, 请求确认 
+- Confirmations : Client->Server, indication确认
+
+Server至少能处理以下请求 
+
+- Find Information Request 
+- Read Reques
+
+###3.1 Attribute PDU Format
+Attribute PDU 格式如下:       
+![](/images/bluetooth/ble_attribute_pdu_format.png)    
+
+=== Authentication Signature Flag ===                  
+当为 0 时， PDU包含Authentication Signature(12 octets), X为13             
+当为 1 时， PDU不包含Authentication Signature, X为1                  
+
+=== Command Flag ===                         
+当为 1 时，PDU 为一个 command 
+
+NOTE: 只有 write command 可能包含 Authentication Signature   
+
+ATT是一种Sequential Protocol，这意味着在执行下一个动作前应该得到相应的回应                  
+ATT将Request-Response和Indication-Confirmation Pair看成一个单一的事务(Transaction)                    
+
+#4. Attribute Protocol PDU
+###4.1 Error Handing  
+Error Handing 主要通过 Error Response 来通知 ，用来表示 request 无法完成并提供相应的原因。
+
+Note: write command 并不会生成 error response
+![](/images/bluetooth/ble_attribute_error_response.png)      
+
+* Attribute Opcode ： 出现 error 的requesr opcode
+* Attribute Handle In Error : Attribute Opcode对应的Attribute Handle, 若无或Opcode不支持, 则使用0x0000 
+* Error Code : 描述具体的错误原因，定义如下图
+![](/images/bluetooth/ble_attribute_error_code1.png)
+![](/images/bluetooth/ble_attribute_error_code2.png)
+
+###4.2 MTU Exchange
+Client 首先发送 Exchange MTU Request 来告诉 Server 自己的最大接收 MTU 大小，并且请求 Server 同样响应这个值        
+![](/images/bluetooth/ble_attribute_mtu_request.png)                               
+Client Rx MTU 必须大于或等于默认的 ATT_MTU     
+这个 request 仅在 client 的连接过程中发送一次    
+
+Server 收到 Exchange MTU Request 之后，响应 Exchange MTU Response
+![](/images/bluetooth/ble_attribute_mtu_response.png)               
+Server Rx MTU 必须大于或等于默认的 ATT_MTU 
+
+当完成Req-Rsp后，Server和Client将ATT_MTU均设置为Client Rx MTU和Server Rx MTU中的较小值       
+当其中任一值小于默认ATT_MTU大小时认为该值不正确，此时应当将ATT_MTU设置为默认值
+
+###4.3 Find Information
+####Find Information Request
+Find Information Request被用来获取与Attribute Handles相关联的类型              
+Client使用该请求来发现Server上的 attribute 和 它们的 type            
+![](/images/bluetooth/ble_find_information_request.png)        
+
+当需要读取所有 Attribute 时 ： Starting Handle = 0x0001  , Ending Handle = 0xFFFF
+####Find Information Response
+![](/images/bluetooth/ble_find_information_response.png)        
+Response PDU中应当包含完整的Handle-UUID对 
+
+其中 Format 参数有两个可能值 ：
+0x01 - Handle(s) and 16-bit Bluetooth UUID(s)                      
+0x02 - Handle(s) and 128-bit UUID(s)              
+对应到 Information Data :             
+![](/images/bluetooth/ble_information_response_data.png)  
+    
+当一个Response PDU无法装下所有的Handle-UUID对时 ,Client以新的Starting Handle发起另一个Find Information Request来获取未回应的信息    
+
+####Find By Type Value Request
+该Req用来获取指定16-bit UUID Attribute Type和Attribute Value的Attribute Handles                
+![](/images/bluetooth/ble_find_by_type_value_request.png)     
+
+####Find By Type Value Response
+![](/images/bluetooth/ble_find_by_type_value_response.png)     
+
+###4.4 Reading Attributes
+####Read By Type Request
+Read By Type Request用来获取Attribute Values(Client已知Attribute Type但不知Attribute Handle)     
+![](/images/bluetooth/ble_read_by_type_value_request.png)       
+
+####Read By Type Response
+![](/images/bluetooth/ble_read_by_type_value_response.png)    
+Attribute Data Field字段是Attribute Handle-Value列表    
+
+####Read Request
+Read Request用来根据一个Handle请求Attribute Value
+
+####Read Response
+响应上面的 read request ,参数包含请求的 Attribute Value 和给定的 Handle
+
+####Read Blob Request
+用来获取Handle指定Offset的Attribute Value
+
+####Read Blob Response
+
+####Read Multiple Request
+用来请求两个或更多已知Handle的属性集的值
+
+####Read Multiple Response
+
+####Read by Group Type Request
+用来请求已知Attribute Type的属性值
+
+####Read by Group Type Response
+
+###4.5 Writing Attributes
+####Write Request
+写已知Handle 的属性值
+
+####Write Response
+用来通知Client属性值已成功写入
+
+####Write Command
+用来写属性值，通常为Control-Point Attribute
+
+####Signed Write Command
+用来写属性值，包含一个Authentication Signature，通常为Control-Point Attribute
+
+###4.6 Queued Writes
+将多个属性值写操作以FIFO方式入队，然后再一个原子操作中进行
+####Prepare Write Request
+
+####Prepare Write Response
+
+#### Execute Write Request
+
+####Execute Write Response
+
+###4.7 Server Initiated
+####Handle Value Notification
+Server可以在任何时候向Client发送Attribute Value的通知
+
+####Handle Value Indication
+Server可以发送Attribute Value的指示(Indication)
+
+####Handle Value Confirmation
+用来回应Handle Value Indication，确认Ind已接收
