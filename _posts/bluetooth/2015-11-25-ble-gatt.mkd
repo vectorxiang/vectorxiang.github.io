@@ -1,0 +1,71 @@
+---
+layout: post
+title:  "BLE 之 GATT 介绍"
+date:   2015-11-25
+categories: [bluetooth]
+---
+#1. 介绍 
+GATT(Generic Attribute Profile)，描述了一种使用ATT的服务框架 , 该框架定义了服务(Server)和服务属性(characteristic)的过程(Procedure)及格式 , Procedure定义了characteristic的发现、读、写、通知(Notifing)、指示(Indicating)及配置characteristic的广播 .
+
+GATT可以被Application或其他Profile使用 , 其协议栈如下图            
+![](/images/bluetooth/ble_gatt_stack.png)         
+
+GATT 可以配置为两个角色 ：         
+
+* Client : 命令、请求发起方 
+* Server : 命令、请求接收方
+
+![](/images/bluetooth/ble_gatt_example.png)    
+如上图 PC 作为 Client ， 温度传感器作为 Server ，Client 向 Server 请求信息 ， Server 响应 Client 的请求传出温度值。
+
+GATT对下层的需求如下：
+
+- Physical Link : 使用GAP Channel Establishment建立的ATT Bearer 
+- GATT Role     : 不依赖于Coontroller角色(Master/Slave) 
+- Security      : 对于LE,Security Features(Authorization、Authentication、Encryption)是可选的 
+                  对于BR/EDR, Encryption是强制的 
+- TX order      : GATT中的多字节字段，采用Least Significant octet先发送(Little Endian)
+
+#2. ATTRIBUTE PROTOCOL
+##2.1 GATT PROFILE HIERARCHY
+GATT指定了数据交互的结构(Structure) ， 这个结构体定义了一些基本元素，如Service、Characteristic ，这些元素存在于Attribute中              
+![](/images/bluetooth/ble_gatt_hierarchy.png)                        
+GATT中最上层是Profile，Profile由一个或多个服务(Service)组成                   
+服务是由Characteristics组成，或是其他服务的引用(Reference)                 
+Characteristic包含一个值(Value)，可能包含该Value的相关信息      
+
+###Service
+Service是[数据]和与之关联的[完成某个特定功能的行为]/[特性]的集合
+            
+在GATT中，**一个服务由服务定义(Service Defintion)来实现**             
+一个服务定义可能包含引用服务(Reference Service)、强制Characteristic和可选Characteristic                        
+
+为了实现旧版本的兼容，新版本中服务定义只能增加新的引用服务或可选Characteristic              
+新版本中的服务定义禁止从旧的服务定义中改变行为                          
+
+Server有两类 
+- Primary Service   : 拥有基本功能的服务,可被其他服务包含,可以通过Primary Service Discovery过程来发现               
+- Secondary Service : 仅用来被Primary/Other Secondary Service、高层协议引用的服务                     
+
+判读一个服务是Primary or Secondary Service可通过高层协议强制规定    
+
+###Included Service
+一个Included Service是一种引用已存在服务的方法，             
+具体办法为在服务定义的开始加上Included Service的引用，          
+这样整个Included Service定义成为新服务定义的一部分                
+
+###Characteristic
+Characteristic由Characteristic Definition定义，                   
+包含一个Characteristic声明、Characteristic属性、值、值的描述(Optional)                  
+
+##2.2 Configured Broadcast
+对于 LE 物理链路 ，在 Server 广播模式过程中 ，Client 可以使用 configured broadcast 来通知 Server 哪一种 characteristic value 应该被添加到 adversting data 广播出来 
+
+方法是设置 configured broadcast 相应的 bit
+广播频率则是 Server 、 Characteristic 行为定义的一部分 
+
+#3. Service Interoperability Requirement
+##3.1 Service Definition
+服务定义(Service Definition)包含一个服务申明(Service Declaration) ，另外可能包含 Include Definitions 和 Characteristic Definitions 
+
+ 
