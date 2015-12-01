@@ -17,7 +17,203 @@ BT enable 变化
 ![](/images/bluetooth/bt_ble_java_enable.png)       
 
 在之前是直接调用 enableNative() , 现在会首先 enable BLE gatt service . 
+其中 initializeNative() 中会去获取 bluedroid 中 gatt 的接口，并调用其 init ,init 仅仅是传递上层的 callback 
 
+另外 Android M bluedroid 中的工作线程的建立也和之前不一样 :
 
+```c
+static const size_t DEFAULT_WORK_QUEUE_CAPACITY = 128;
 
+thread_t *bt_workqueue_thread = thread_new(BT_WORKQUEUE_NAME);
 
+thread_t *thread_new(const char *name) {
+  return thread_new_sized(name, DEFAULT_WORK_QUEUE_CAPACITY);
+}
+```
+再来看一下 thread_new_sized 函数，其功能是 new 一个 thread_t 并填充其成员变量 ：
+
+```c
+struct thread_t {
+  bool is_joined;
+  pthread_t pthread;
+  pid_t tid;
+  char name[THREAD_NAME_MAX + 1];
+  reactor_t *reactor;
+  fixed_queue_t *work_queue;
+};
+
+thread_t *thread_new_sized(const char *name, size_t work_queue_capacity) {
+  thread_t *ret = osi_calloc(sizeof(thread_t));
+
+  ret->reactor = reactor_new();
+	{//reactor_new
+  	  reactor_t *ret = (reactor_t *)osi_calloc(sizeof(reactor_t));
+  	  ret->epoll_fd = epoll_create(MAX_EVENTS);
+  	  ret->event_fd = eventfd(0, 0);
+  	  pthread_mutex_init(&ret->list_lock, NULL);
+  	  ret->invalidation_list = list_new(NULL);
+  	  struct epoll_event event;
+  	  memset(&event, 0, sizeof(event));
+  	  event.events = EPOLLIN;
+  	  event.data.ptr = NULL;
+  	  epoll_ctl(ret->epoll_fd, EPOLL_CTL_ADD, ret->event_fd, &event);
+	}	
+
+  ret->work_queue = fixed_queue_new(work_queue_capacity);
+	{//fixed_queue_new
+	  fixed_queue_t *ret = osi_calloc(sizeof(fixed_queue_t))
+  	  pthread_mutex_init(&ret->lock, NULL);
+           ret->capacity = capacity;
+	  ret->list = list_new(NULL);
+  	  ret->enqueue_sem = semaphore_new(capacity);
+           ret->dequeue_sem = semaphore_new(0);
+	}
+
+  // Start is on the stack, but we use a semaphore, so it's safe
+  struct start_arg start;
+  start.start_sem = semaphore_new(0);
+
+  strncpy(ret->name, name, THREAD_NAME_MAX);
+  start.thread = ret;
+  start.error = 0;
+  pthread_create(&ret->pthread, NULL, run_thread, &start);
+  ......
+  return ret;
+
+error:
+  ......
+}
+```
+这里又会涉及到 thread_t 的两个成员变量 reactor 和 work_queue
+
+```c
+struct reactor_t {
+  int epoll_fd;
+  int event_fd;
+  pthread_mutex_t list_lock;  // protects invalidation_list.
+  list_t *invalidation_list;  // reactor objects that have been unregistered.
+  pthread_t run_thread;       // the pthread on which reactor_run is executing.
+  bool is_running;            // indicates whether |run_thread| is valid.
+  bool object_removed;
+};
+
+typedef struct fixed_queue_t {
+  list_t *list;
+  semaphore_t *enqueue_sem;
+  semaphore_t *dequeue_sem;
+  pthread_mutex_t lock;
+  size_t capacity;
+
+  reactor_object_t *dequeue_object;
+  fixed_queue_cb dequeue_ready;
+  void *dequeue_context;
+} fixed_queue_t;
+```
+继续回到上面，可以看到最后建立了一个线程，线程的实现函数为 run_thread 
+
+```c
+static void *run_thread(void *start_arg) {
+  thread_t *thread = start->thread;
+  //首先更改线程的名称
+  if (prctl(PR_SET_NAME, (unsigned long)thread->name) == -1) {
+    ......
+    return NULL;
+  }
+  thread->tid = gettid();
+
+  int fd = fixed_queue_get_dequeue_fd(thread->work_queue);
+  void *context = thread->work_queue;
+
+  //监听 fd ,事件为 EPOLLIN | EPOLLRDHUP , event.data.ptr 指向 reactor_object_t ,其 read_ready 为 work_queue_read_cb
+  reactor_object_t *work_queue_object = reactor_register(thread->reactor, fd, context, work_queue_read_cb, NULL);
+  reactor_start(thread->reactor);		//事件处理循环
+	{//reactor_start
+  	  if(reactor)
+     	    return run_reactor(reactor, 0);	//0表示死循环
+	}
+  reactor_unregister(work_queue_object);
+  ......
+
+  return NULL;
+}
+
+static reactor_status_t run_reactor(reactor_t *reactor, int iterations) {
+  reactor->run_thread = pthread_self();
+  reactor->is_running = true;
+
+  struct epoll_event events[MAX_EVENTS];
+  for (int i = 0; iterations == 0 || i < iterations; ++i) {
+    pthread_mutex_lock(&reactor->list_lock);
+    list_clear(reactor->invalidation_list);
+    pthread_mutex_unlock(&reactor->list_lock);
+
+    int ret;
+    do {
+      ret = epoll_wait(reactor->epoll_fd, events, MAX_EVENTS, -1);
+    } while (ret == -1 && errno == EINTR);
+
+    if (ret == -1) {
+      reactor->is_running = false;
+      return REACTOR_STATUS_ERROR;
+    }
+
+    for (int j = 0; j < ret; ++j) {
+      if (events[j].data.ptr == NULL) {
+        eventfd_t value;
+        eventfd_read(reactor->event_fd, &value);
+        reactor->is_running = false;
+        return REACTOR_STATUS_STOP;
+      }
+
+      reactor_object_t *object = (reactor_object_t *)events[j].data.ptr;
+
+      ......
+
+      reactor->object_removed = false;
+      if (events[j].events & (EPOLLIN | EPOLLHUP | EPOLLRDHUP | EPOLLERR) && object->read_ready)
+        object->read_ready(object->context);		//所以这里的可读事件的处理就是上面的 work_queue_read_cb
+      if (!reactor->object_removed && events[j].events & EPOLLOUT && object->write_ready)
+        object->write_ready(object->context);
+      pthread_mutex_unlock(&object->lock);
+
+      if (reactor->object_removed) {
+        pthread_mutex_destroy(&object->lock);
+        osi_free(object);
+      }
+    }
+  }
+  
+  reactor->is_running = false;
+  return REACTOR_STATUS_DONE;
+}
+```
+在来看一下向线程传递消息 ：
+
+```c
+thread_post(bt_workqueue_thread, btu_task_start_up, NULL);
+
+bool thread_post(thread_t *thread, thread_fn func, void *context) {
+  //将数据填充到 item
+  work_item_t *item = (work_item_t *)osi_malloc(sizeof(work_item_t));
+  item->func = func;
+  item->context = context;
+
+  fixed_queue_enqueue(thread->work_queue, item);
+  return true;
+}
+
+void fixed_queue_enqueue(fixed_queue_t *queue, void *data) {
+  assert(queue != NULL);
+  assert(data != NULL);
+
+  semaphore_wait(queue->enqueue_sem);
+
+  pthread_mutex_lock(&queue->lock);
+  //将数据添加到 fixed_queue_t 的 list 中
+  list_append(queue->list, data);
+  pthread_mutex_unlock(&queue->lock);
+
+  //调用 eventfd_write
+  semaphore_post(queue->dequeue_sem);
+}
+```
