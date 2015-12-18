@@ -3,21 +3,24 @@ layout: post
 title:  "Android M bluetooth update"
 date:   2015-11-6
 categories: [bluetooth]
----
-#新特性    
+---   
 新支持的profile : SAP(SIM access profile)   
 
-另外原有的profile也支持新的特性：  
+另外原有的profile也有改变：  
 同时保持连接两台A2DP Sink 设备 (目前默认仍然只能同时连接一台设备，可以通过修改 persist.bt.max.a2dp.connections 为 2 来支持这个特性)
 同时保持连接两台AVRCP controllers设备
 
 >虽然是连接两台设备，但同时只能有一台设备收听音乐，收听音乐的设备可以在这两台已连接设备之间切换 (可以通过修改 persist.bt.enable.multicast 为 1 来支持)
 
 BT enable 变化        
-![](/images/bluetooth/bt_ble_java_enable.png)       
+![](/images/bluetooth/bt_ble_java_enable.png)  
 
 在之前是直接调用 enableNative() , 现在会首先 enable BLE gatt service . 
 其中 initializeNative() 中会去获取 bluedroid 中 gatt 的接口，并调用其 init ,init 仅仅是传递上层的 callback 
+
+bluedroid 中的流程也有一些改变 ：
+![](/images/bluetooth/bt_M_bluedroid_enable.png)    
+
 
 另外 Android M bluedroid 中的工作线程的建立也和之前不一样 :
 

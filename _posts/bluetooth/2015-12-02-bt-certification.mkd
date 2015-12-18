@@ -1,0 +1,30 @@
+---
+layout: post
+title:  "BT certification"
+date:   2015-12-02
+categories: [bluetooth]
+---
+如果要在出货的产品上打上蓝牙的logo ,就必须先通过 SIG 的蓝牙认证 。
+
+在准备阶段需要填写 QDL_listing_Info_Sheet 文档，内容包含 product name , bt version ,  power class & rf gain , 相关 QDID ，support profiles 等等。
+
+蓝牙认证的测试分为两个部分 RF 和 profile :
+
+###RF
+如果是 bt4.0 , RF 会包含 BR/EDR 和 BLE 两个部分 ，会分别测试射频的功率是不是在指定 power class 的范围。
+
+1. BR/EDR 需要我们提供进入 test mode 的方法， 这个在 bluedroid 有现成的接口，可以直接调用。                  
+
+2. BLE 部分需要我们提供可以直接下 hci command 的接口,这个最好先在本地用 reset command测试一下 , 看能否收到chip回的 event ：                     
+
+ * Broadcomm 的方式是将 BT chip 和 SOC 之间的 uart 断开，直接从BT chip 端引出 uart 接到一个串口转USB卡上，将转接卡插到PC上，PC可以直接读写这个接口来传递hci command 和接收 event . 另外由于chip 和 SOC 端的 uart 被切断， 博通有提供一个 windows上的 bluetool用来从PC端 download BT FW ，所以测试流程是：修改gpio上电；连接上转接卡，使用 bluetool 下 fw;开始测试 。 
+
+ * Qualcomm 的 BT 集成在 SOC 内部，开机就会上电并由 wcnss driver download FW 。另外高通支持在USB连接的情况下在PC上生成一个 NMEA port ，和上面一样，PC可以通过这个端口来直接和 BT 通信。 测试方法是： 1. setprop sys.usb.config diag,serial_tty,serial_smd 并配置 NEMA port 为1～8 ，band rate 115200 ；2.打开 wdsdaemon ,因为上一个步骤中adb 被关掉了，所以可以通过 audio debug port 来执行，或者在 setprop 中执行 ，也可以写一个app执行 ; 开始测试。
+
+###Profiles
+测试profiles之前需先到 bluetooth.org 上填写支持的 profiles 和其各个 features 生成测试文件，profiles 测试主要是由认证机构来完成，但其中会有很多测项无法fail ,这些就需要我们提供正确的测试方法或者是由我们自己将这些 fail 项测试OK之后将生成的测试报告传给认证机构 。                       
+测试软件：PTS （可以在bluetooth.org 下载）                    
+测试硬件：USB BT dongle                                                     
+测试时新建project,将之前生成的测试文件载入即可测试。
+
+ 
