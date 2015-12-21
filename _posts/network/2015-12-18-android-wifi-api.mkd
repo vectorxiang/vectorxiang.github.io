@@ -1,0 +1,116 @@
+---
+layout: post
+title: "Android之wifi相关API"
+description:
+category: network
+tags: [network, linux]
+mathjax: 
+chart:
+comments: false
+---
+packet   **<font size=5>android.net.wifi<font>**   
+
+###相关授权:                    
+使用wifi    
+
+>\<uses-feature android:name="android.hardware.wifi" /\>     
+                     
+访问Wi-Fi网络状态信息    
+>\<uses-permission android:name="android.permission.ACCESS_WIFI_STATE" /\>  
+                                    
+改变WiFi状态   
+>\<uses-permission android:name="android.permission.CHANGE_WIFI_STATE" /\>      
+                      
+改变WiFi多播状态   
+
+>\<uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" /\>                        
+
+###android.net.wifi 中常用的类有：    
+      
+1. ScanResult, 主要用来描述已经检测出的接入点，包括接入点的地址、接入点的名称、身份认证、频率、信号强度等。
+
+2. WifiConfiguration, wifi网络配置，包括安全配置等。
+
+3. WifiInfo, Wifi无线连接的描述，包括接入点、网络连接状态、隐藏的接入点、IP地址、连接速度、MAC地址、网络ID、信号强度等。
+
+4. WifiManager, 提供管理wifi连接的大部分API。
+
+5. WifiManager.WifiLock, 通过WifiLock来锁定wifi网络，使其一直保持连接，直到这个锁定被释放。如果app需要下载很大的文件，就需要保持wifi锁，来确保app有足够的时间下载完成。wifi锁不能超越wifi-enabled设置，也没有飞行模式。    
+
+###WifiManager的常用方法
+
+1. addNetwork
+
+2. calculateSignalLevel,
+
+3. compareSignalLevel,
+
+4. createWifiLock,
+
+5. disableNetwork,
+
+6. disconnect,
+
+7. enableNetwork,
+
+8. getConfiguredNetworks,
+
+9. getDhcpInfo,
+
+10. getScanResults,
+
+11. getWifiState,
+
+12. isWifiEnabled,
+
+13. pingSupplicant,
+
+14. reassociate,
+
+15. removeNetwork,
+
+16. saveConfiguration,
+
+17. setWifiEnabled,
+
+18. startScan,
+
+19. updateNetwork.
+
+###应用
+```java
+WifiManager wifiManager = (WifiManager) getSystemService(Context.WIFI_SERVICE);
+mWifiInfo = mWifiManager.getConnectionInfo();
+
+// 打开wifi
+mWifiManager.setWifiEnabled(true);
+
+private List<ScanResult> mWifiList;
+
+// 扫描wifi网络
+mWifiManager.startScan();
+mWifiList = mWifiManager.getScanResults();
+
+WifiConfiguration wifiConfig = new WifiConfiguration();
+wifiConfig.SSID = "\"" + ssid + "\"";
+wifiConfig.preSharedKey = "\"" + 密码 + "\"";
+......
+
+// 添加一个网络并连接
+int wifiConfigId = mWifiManager.addNetwork(wifiConfig);
+mWifiManager.enableNetwork(wifiConfigId, true);
+
+// 得到MAC地址
+mWifiInfo.getMacAddress();
+
+// 得到接入点的BSSID
+mWifiInfo.getBSSID();
+
+// 得到IP地址
+mWifiInfo.getIpAddress();
+
+......
+```
+
+
+
