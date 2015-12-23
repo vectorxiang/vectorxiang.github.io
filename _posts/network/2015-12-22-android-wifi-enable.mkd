@@ -1,0 +1,266 @@
+---
+layout: post
+title: "Android之 wifi enable 流程"
+description:
+category: network
+tags: [network, linux]
+mathjax: 
+chart:
+comments: false
+---
+从 Settings 中的 switch 控件开始 ：   
+
+*WifiEnabler.java*
+
+```java
+    public void onSwitchChanged(Switch switchView, boolean isChecked) {
+        ......
+        if (!mWifiManager.setWifiEnabled(isChecked)) {
+            // Error
+            mSwitchBar.setEnabled(true);
+            Toast.makeText(mContext, R.string.wifi_error, Toast.LENGTH_SHORT).show();
+        }
+```
+WifiManager 通过 binder 调用 WifiService 的接口：
+
+*WifiServiceImpl.java*   
+
+```java
+    public synchronized boolean setWifiEnabled(boolean enable) {
+        enforceChangePermission();
+
+        long ident = Binder.clearCallingIdentity();
+
+        // 判断 Settings 中的设定当前是否为 airmode 并且可以打开 wifi
+        try {
+            if (! mSettingsStore.handleWifiToggled(enable)) {
+                // Nothing to do if wifi cannot be toggled
+                return true;
+            }
+        } finally {
+            Binder.restoreCallingIdentity(ident);
+        }
+
+        // mIsControllerStarted 在开机的时候设为 true
+        if (!mIsControllerStarted) {
+            Slog.e(TAG,"WifiController is not yet started, abort setWifiEnabled");
+            return false;
+        }
+
+        mWifiController.sendMessage(CMD_WIFI_TOGGLED);
+        return true;
+    }
+```
+当前 WifiController 处于 ApStaDisabledState :    
+
+```java
+                case CMD_WIFI_TOGGLED:
+                case CMD_AIRPLANE_TOGGLED:
+                    if (mSettingsStore.isWifiToggleEnabled()) {
+                        if (doDeferEnable(msg)) {
+                            if (mHaveDeferredEnable) {
+                                //  have 2 toggles now, inc serial number an ignore both
+                                mDeferredEnableSerialNumber++;
+                            }
+                            mHaveDeferredEnable = !mHaveDeferredEnable;
+                            break;
+                        }
+                        if (mDeviceIdle == false) {
+                            transitionTo(mDeviceActiveState);
+                        } else {
+                            checkLocksAndTransitionWhenDeviceIdle();
+                        }
+                    } else if (mSettingsStore.isScanAlwaysAvailable()) {
+                        transitionTo(mStaDisabledWithScanState);
+                    }
+                    break;
+```
+这里的处理只是将状态机转换到 DeviceActiveState , 其父状态为 StaEnabledState ,所以会先调用到父状态的 enter(),在调用 DeviceActiveState 的 enter() :    
+
+```java
+    class StaEnabledState extends State {
+        @Override
+        public void enter() {
+            mWifiStateMachine.setSupplicantRunning(true);
+        }
+
+    class DeviceActiveState extends State {
+        @Override
+        public void enter() {
+            mWifiStateMachine.setOperationalMode(WifiStateMachine.CONNECT_MODE);
+            mWifiStateMachine.setDriverStart(true);
+            mWifiStateMachine.setHighPerfModeEnabled(false);
+        }
+```
+
+上面分别是调用 WifiStateMachine 的四个函数，这四个函数都是给WifiStateMachine发送四个消息，分别是 CMD_START_SUPPLICANT 、SET_OPERATIONAL_MODE 、CMD_START_DRIVER CMD_SET_HIGH_PERF_MODE , 而当前 WifiStateMachine 处于初始状态 InitialState ，首先来看 CMD_START_SUPPLICANT 的处理 ：      
+
+```java
+    case CMD_START_SUPPLICANT:
+        /* 
+         加载wifi driver , 其中 WIFI_DRIVER_MODULE_PATH 在qcom中在 
+         vendor/qcom/proprietary/common/msm8916/BoardConfigVendor.mk
+         被定义为 "/system/lib/modules/wlan.ko"
+        */
+        if (mWifiNative.loadDriver()) {
+
+            ......
+  
+            // 启动wpa_supplicant
+            if (mWifiNative.startSupplicant(mP2pSupported)) {
+                setWifiState(WIFI_STATE_ENABLING);
+                
+                /* 和wpa_supplicant建立socket连接 ，最后调用的是 WifiNative的
+                   connenctToSupplicant ,然后在 MonitorThread 中处理event */
+                mWifiMonitor.startMonitoring();
+                transitionTo(mSupplicantStartingState);
+            } else {
+                loge("Failed to start supplicant!");
+            }
+        } else {
+            loge("Failed to load driver");
+        }
+        break;
+```
+mWifiMonitor.startMonitoring() 主要完成两个动作 ： 1.和wpa_supplicant建立socket连接；2.新建 MonitorThread 来处理 event . 另外在连接建立之后向 WifiStateMachine 发送 SUP_CONNECTION_EVENT 
+
+当 WifiStateMachine 处理完 CMD_START_SUPPLICANT 之后，马上收到 SET_OPERATIONAL_MODE 和 CMD_START_DRIVER，这两个消息都会被延迟处理, CMD_SET_HIGH_PERF_MODE 会被 DefaultState 处理 ， 紧接着 SupplicantStartingState 收到  SUP_CONNECTION_EVENT ：  
+
+```java
+    case WifiMonitor.SUP_CONNECTION_EVENT:
+        if (DBG) log("Supplicant connection established");
+        // 发送 broadcast 通知 wifi 状态变为 WIFI_STATE_ENABLED
+        setWifiState(WIFI_STATE_ENABLED);
+
+        mSupplicantRestartCount = 0;
+
+        /* Reset the supplicant state to indicate the supplicant
+         * state is not known at this time */
+        mSupplicantStateTracker.sendMessage(CMD_RESET_SUPPLICANT_STATE);
+
+        ......
+
+        mWifiInfo.setMacAddress(mWifiNative.getMacAddress());
+
+        mWifiNative.enableSaveConfig();
+        if (mWifiConfigStore.enableAutoJoinWhenAssociated.get()) {
+            mWifiNative.disconnect();
+        }
+
+        // 加载并enable用户之前连接过并保存的AP
+        mWifiConfigStore.loadAndEnableAllNetworks();
+
+        if (mContext.getResources().getBoolean(R.bool.wifi_autocon)
+            && !shouldAutoConnect()) {
+            mWifiConfigStore.disableAllNetworks();
+        }
+
+        // 初始化一些Wps相关的信息
+        initializeWpsDetails();
+
+        sendSupplicantConnectionChangedBroadcast(true);
+        transitionTo(mDriverStartedState);
+        break;
+```
+这里主要调用WifiConfigStore的loadAndEnableAllNetworks函数来加载并enable用户之前连接过并保存的AP，然后会初始化一些Wps相关的信息，最后transition到DriverStartedState上 。
+
+继续看 DriverStartedState ：
+
+```java
+    class DriverStartedState extends State {
+        @Override
+        public void enter() {
+
+            /*  由于蓝牙运行在2.4GHz频率上， 所以为了避免wlan和蓝牙互相干扰， 下面这个函数将告知
+              wlan driver蓝牙是否启用。 如果是， wlan芯片会做适当调整。 */
+            mWifiNative.setBluetoothCoexistenceScanMode(mBluetoothConnectionActive);
+            setNetworkDetailedState(DetailedState.DISCONNECTED);
+
+            mDhcpActive = false;
+
+            /*
+              CONNECT_MODE，这种模式下，STA可以scan并连接热点
+              SCAN_ONLY_MODE，这种模式下，STA只能扫描热点
+              SCAN_ONLY_WIFI_OFF_MODE，在这种模式下，当wifi是toggle off的情况下，也可以进行scan
+            */
+            if (mOperationalMode != CONNECT_MODE) {
+                mWifiNative.disconnect();
+                mWifiConfigStore.disableAllNetworks();
+                if (mOperationalMode == SCAN_ONLY_WITH_WIFI_OFF_MODE) {
+                    setWifiState(WIFI_STATE_DISABLED);
+                }
+                transitionTo(mScanModeState);
+            } else {
+
+                // 实际调用的是 doStringCommand("STATUS")发送命令给 WPAS
+                mWifiNative.status();
+                // 进入到 Disconnected state 会 scan 和 subsequently AutoJoin
+                transitionTo(mDisconnectedState);
+            }
+
+            ......
+
+            if (mP2pSupported) {
+                if (mOperationalMode == CONNECT_MODE) {
+                    mWifiP2pChannel.sendMessage(WifiStateMachine.CMD_ENABLE_P2P);
+                }
+            }
+
+            ......
+        }
+```
+WifiStateMachine将转入 DisconnectedState :     
+
+```java
+    class DisconnectedState extends State {
+        @Override
+        public void enter() {
+            // P2P 相关
+            if (mTemporarilyDisconnectWifi) {
+                mWifiP2pChannel.sendMessage(WifiP2pServiceImpl.DISCONNECT_WIFI_RESPONSE);
+                return;
+            }
+
+            /** clear the roaming state, if we were roaming, we failed */
+            mAutoRoaming = WifiAutoJoinController.AUTO_JOIN_IDLE;
+
+            if (useHalBasedAutoJoinOffload()) {
+                startGScanDisconnectedModeOffload("disconnectedEnter");
+            } else {
+                if (mScreenOn) {
+                    startDelayedScan(500, null, null);
+                } else {
+                    if (mBackgroundScanSupported) {
+                        /*
+                         当系统支持后台扫描时， 如果手机屏幕关闭， 则设置mEnableBackgroudScan为true以启动后台扫描。
+                         mIsScanOngoing 用于表示WifiService是否在等待扫描请求的结果。 由于启动后台扫描的时候
+                         会先取消上一次的扫描请求， 所以如果mScanResultIsPending为true的话， 则先不启用后台扫描。
+                        */
+                        if (!mIsScanOngoing) {
+                            if (!enableBackgroundScan(true)) {
+                                handlePnoFailError();
+                            }
+                        }
+                    } else {
+                        /* 设置定时扫描任务。 到时间后， AlarmManager将发送一个"ACTION_START_SCAN"Intent
+                           WifiStateMachine对该Intent的处理就是调用 startScan 函数   */
+                        setScanAlarm(true);
+                    }
+                }
+            }
+
+
+            // 如果当前没有P2P连接， 并且没有之前保存的AP信息， 则发送 CMD_NO_NETWORKS_PERIODIC_SCAN 消息以触发扫描。
+            if (mNoNetworksPeriodicScan != 0 && !mP2pConnected.get()
+                    && mWifiConfigStore.getConfiguredNetworks().size() == 0) {
+                sendMessageDelayed(obtainMessage(CMD_NO_NETWORKS_PERIODIC_SCAN,
+                        ++mPeriodicScanToken, 0), mNoNetworksPeriodicScan);
+            }
+
+            mDisconnectedTimeStamp = System.currentTimeMillis();
+            mDisconnectedPnoAlarmCount = 0;
+        }
+```
+到这里 wifi enable 的工作基本结束 。
+
+ 

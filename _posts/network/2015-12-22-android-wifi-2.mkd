@@ -1,0 +1,11 @@
+---
+layout: post
+title: "Android之wifi (二)"
+description:
+category: network
+tags: [network, linux]
+mathjax: 
+chart:
+comments: false
+---
+##3. wpa_supplicant
