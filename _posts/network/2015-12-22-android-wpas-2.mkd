@@ -1,0 +1,22 @@
+---
+layout: post
+title: "Android 之 wpa_supplicant 操作流程"
+description:
+category: network
+tags: [network, linux]
+mathjax: 
+chart:
+comments: false
+---
+#Scan
+回顾一下 ：
+
+```c
+=>wpa_supplicant_add_iface
+ ==>wpa_supplicant_init_iface
+     wpa_s->ctrl_iface = wpa_supplicant_ctrl_iface_init(wpa_s);
+     ===>wpas_ctrl_iface_open_sock
+           eloop_register_read_sock(priv->sock, wpa_supplicant_ctrl_iface_receive, wpa_s, priv);
+```
+
+client 发送的命令全部都由 wpa_supplicant_ctrl_iface_receive 来处理

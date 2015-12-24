@@ -1,0 +1,629 @@
+---
+layout: post
+title: "Android之wifi wpa_supplicant"
+description:
+category: network
+tags: [network, linux]
+mathjax: 
+chart:
+comments: false
+---
+#1. 简介
+wpa_supplicant是一个开源软件项目，它实现了Station对无线网络进行管理和控制的功能, 下面列举其中几个重要的功能：  
+ 
+* **支持WPA和IEEE 802.11i(无线安全标准)所定义的大部分功能**     
+* **支持多种EAP Method**
+* **对各种无线网卡和驱动的支持**
+
+wpa_supplicant包含两个主要的可执行工具：wpa_supplicant 和 wpa_cli 。wpa_supplicant是核心程序，它和 wpa_cli 的关系就是服务和客户端的关系，在无需显示屏的情况下我们可以直接用 wpa_cli 来操作 wifi.   
+
+#2. wpa_cli
+wpa_cli 的 常用参数有 ：   
+
+* -p: ctrl sockets 路径
+* -i: 网络接口名称
+
+常用命令有 ：   
+   
+* status : 获取当前 WPA/EAPOL/EAP 状态   
+* scan 
+* scan_result
+* add_network
+* remove_network
+* list_network
+* set_network
+* get_network \<network id\> \<variable\>
+* enable_network \<network id\>
+* disable_network \<network id\> ： 会 disable 其他的 network
+* select_network \<network id\>
+* disconnect
+* reconnect
+* save_config
+
+使用前需先加载 wifi driver 并且启动 wpas 。   
+
+![](/images/network/android_wifi_wpa_cli_test1.jpg)   
+![](/images/network/android_wifi_wpa_cli_test2.jpg)    
+![](/images/network/android_wifi_wpa_cli_test3.png)   
+![](/images/network/android_wifi_wpa_cli_test4.png)   
+
+#3. 架构
+接下来在来看一下 wpa_supplicant 的架构 ：     
+
+![](/images/network/android_wifi_wpas_architecture.png)    
+
+WPAS主要包含如下几个重要模块：   
+
+* event loop , WPAS所有工作围绕事件展开，并没有采用多线程所有事件都在主线程完成，主线程等待事件的发生并进行处理。
+
+* driver i/f , 该接口模块用于隔离和底层驱动直接交互的那些driver控制模块( 图中的wext等，又称为driver wrapper ，driver wrapper会因为平台和芯片驱动不同而不同），这样可以保证其他模块的平台/驱动无关性。
+
+* EAPPOL sm , EAP sm , 根据这两个协议实现的状态机，另外还有WPAS自己的状态机 ： WPA/WPA2 sm .
+
+* configuration , WPAS支持较多的配置参数，这些参数的处理由configuration模块完成.
+
+* WPAS是C/S结构中的Server端，它通过ctrl i/f模块向客户端提供通信接口。Linux/Unix平台中，Client端利用Unix域socket与其通信。目前常用的Client端wpa_cli（无界面的命令行程序）和wpa_gui（UI用Qt实现）。
+
+#4. WPAS的初始化
+在 Android 系统中启动 wpas 是通过 “setprop ctrl.start wpa_supplicant” ，其定义在 init.qcom.rc 中:   
+
+```c
+service p2p_supplicant /system/bin/wpa_supplicant \
+    -ip2p0 -Dnl80211 -c/data/misc/wifi/p2p_supplicant.conf \
+    -I/system/etc/wifi/p2p_supplicant_overlay.conf -N \
+    -iwlan0 -Dnl80211 -c/data/misc/wifi/wpa_supplicant.conf \
+    -I/system/etc/wifi/wpa_supplicant_overlay.conf \
+    -O/data/misc/wifi/sockets -puse_p2p_group_interface=1 -dd \
+    -e/data/misc/wifi/entropy.bin -g@android:wpa_wlan0
+    class main
+    socket wpa_wlan0 dgram 660 wifi wifi
+    disabled
+    oneshot
+
+service wpa_supplicant /system/bin/wpa_supplicant \
+    -iwlan0 -Dnl80211 -c/data/misc/wifi/wpa_supplicant.conf \
+    -I/system/etc/wifi/wpa_supplicant_overlay.conf \
+    -O/data/misc/wifi/sockets -dd \
+    -e/data/misc/wifi/entropy.bin -g@android:wpa_wlan0
+    class main
+    socket wpa_wlan0 dgram 660 wifi wifi
+    disabled
+    oneshot
+```
+当支持 P2P 时启动的是 p2p_supplicant ，执行的都是 “/system/bin/wpa_supplicant” ，差别是启动时后面的参数不一样。 下面简要介绍部分参数 ：
+
+* -i: 网络接口名称， 如无线网卡通常为wlan0   
+* -c: 配置文件路径  
+* -C: ctrl_interface参数 （当不设定 -c 时使用）
+* -d: 提高 debug level , -dd增加更多 
+* -D: driver name
+* -e: 随机数文件
+* -g: 全局 ctrl_interface
+* -I: additional 配置文件路径
+* -O: 覆盖ctrl_interface参数
+* -p: 驱动参数
+* -N: 接下来是一个新的接口描述
+
+这里重点看一下 "-c" ，也就是指定 wpa_supplicant启动配置文件:   
+
+*/data/misc/wifi/p2p_supplicant.conf*   
+
+```c
+ctrl_interface=/data/misc/wifi/sockets    #ctrl_interface知名控制接口Unix域socket的文件名
+disable_scan_offload=1
+driver_param=use_p2p_group_interface=1
+update_config=1            #保存WPAS运行过程中修改的配置信息
+device_name=WW_Z00L
+manufacturer=asus
+model_name=ASUS_Z00LD
+model_number=ASUS_Z00LD
+serial_number=F5AZCY05L854
+device_type=10-0050F204-5
+config_methods=physical_display virtual_push_button
+p2p_disabled=1
+p2p_no_group_iface=1
+pmf=1
+external_sim=1
+key_mgmt_offload=1
+ 
+#wpa_supplicant运行过程中得到的无线网络信息都会通过”network“配置项保存到配置文件中，如果该信息完整，一旦wpa_supplicant找到该无线网络就会尝试用保存的信息去加入它。
+network={
+    ssid="My ASUS"
+    psk="123456789"
+    key_mgmt=WPA-PSK
+    priority=2
+}
+```
+
+WPAS 的初始化流程可以概括为下图 ：   
+
+![](/images/network/android_wifi_wpas_init.jpg)   
+
+下面从头开始追代码：   
+
+```c
+int main(int argc, char *argv[])
+{
+	int c, i;
+	struct wpa_interface *ifaces, *iface;
+	int iface_count, exitcode = -1;
+	struct wpa_params params;
+	struct wpa_global *global;
+
+	if (os_program_init())
+		return -1;
+
+	os_memset(&params, 0, sizeof(params));
+	params.wpa_debug_level = MSG_INFO;
+
+	iface = ifaces = os_zalloc(sizeof(struct wpa_interface));
+	iface_count = 1;
+
+         // 输入输出重定向到/dev/null设备
+	wpa_supplicant_fd_workaround(1);
+
+         // 参数解析
+	for (;;) {
+		c = getopt(argc, argv,
+			   "b:Bc:C:D:de:f:g:G:hi:I:KLm:No:O:p:P:qsTtuvW");
+		if (c < 0)
+			break;
+		switch (c) {
+		......
+		case 'c':
+			iface->confname = optarg;
+			break;
+		......
+		case 'd':
+			params.wpa_debug_level--;
+			break;
+		case 'e':
+			params.entropy_file = optarg;
+			break;
+                  ......
+		case 'i':
+			iface->ifname = optarg;
+			break;
+		......
+		}
+	}
+
+	exitcode = 0;
+
+         // 关键函数，根据传入的参数， 创建并初始化一个wpa_global对象
+	global = wpa_supplicant_init(&params);
+	
+         ......
+
+         // WPAS支持操作多个无线网络设备， 此处通过 wpa_supplicant_add_iface 将它们一一添加到WPAS中
+	for (i = 0; exitcode == 0 && i < iface_count; i++) {
+		struct wpa_supplicant *wpa_s;
+
+		......
+		wpa_s = wpa_supplicant_add_iface(global, &ifaces[i], NULL);
+		}
+	}
+
+         // 运行 event loop
+	if (exitcode == 0)
+		exitcode = wpa_supplicant_run(global);
+
+	wpa_supplicant_deinit(global);
+
+	fst_global_deinit();
+
+out:
+	......
+}
+```
+如上面的流程图，其中包括3个关键的函数 ：    
+
+* wpa_supplicant_init   
+* wpa_supplicant_add_iface   
+* wpa_supplicant_run
+
+##4.1 wpa_supplicant_init
+```c
+struct wpa_global * wpa_supplicant_init(struct wpa_params *params)
+{
+	struct wpa_global *global;
+	int ret, i;
+
+	if (params == NULL)
+		return NULL;
+
+	......
+
+         // 注册EAP方法
+	ret = eap_register_methods();	
+
+         // 创建一个wpa_global对象
+	global = os_zalloc(sizeof(*global));
+
+	...... // 初始化global中的其他参数
+
+         // 初始化了WPAS中事件驱动的核心数据结构体 eloop_data
+	if (eloop_init()) {
+		......
+	}
+
+	random_init(params->entropy_file);
+
+         // 初始化全局控制接口对象
+	global->ctrl_iface = wpa_supplicant_global_ctrl_iface_init(global);
+
+	for (i = 0; wpa_drivers[i]; i++)
+		global->drv_count++;
+	if (global->drv_count == 0) {
+		wpa_printf(MSG_ERROR, "No drivers enabled");
+		wpa_supplicant_deinit(global);
+		return NULL;
+	}
+
+         // 分配全局driver wrapper上下文信息数组
+	global->drv_priv = os_calloc(global->drv_count, sizeof(void *));
+
+	return global;
+}
+```
+wpa_supplicant_init函数的主要功能是初始化wpa_global以及一些与整个程序相关的资源， 包括随机数资源、 eloop事件循环机制以及设置消息全局回调函数。   
+
+##4.2 eloop_init函数及event loop模块
+eloop_init函数仅初始化了WPAS中事件驱动的核心数据结构体 eloop_data 。   
+
+WPAS 支持5种类型的 event :   
+
+* read event
+* write event
+* exception event , 如果 socket 操作错误，则有错误事件处理 
+* timeout event , 通过 select 的等待超时机制实现定时事件
+* signal , 来自kernel
+
+与之对应的是 eloop_data 结构体 :   
+
+```c
+struct eloop_data {
+    int max_sock;    //供select使用
+  
+    int count;     //所有事件表中事件总数
+    ......
+    struct eloop_sock_table readers;    //read事件表
+    struct eloop_sock_table writers;    //write事件表
+    struct eloop_sock_table exceptions;    //exception事件表
+  
+    struct dl_list timeout;    //timeout事件表
+  
+    int signal_count;    //signal事件个数
+    struct eloop_signal *signals;    //signal事件表
+    ......
+};
+```
+
+针对这5种事件会先注册事件处理函数，与之对应的注册函数为 , eloop.h :   
+
+```c
+// 注册socket读事件处理函数,参数sock代表一个socket句柄。一旦该句柄上有读事件发生,则handler函数将被事件处理循环调用
+int eloop_register_read_sock(int sock, eloop_sock_handler handler, void *eloop_data, void *user_data);
+   
+// 注册socket事件处理函数,具体是哪种事件(只能是读、写或异常)由type参数决定
+int eloop_register_sock(int sock, eloop_event_type type, eloop_sock_handler handler,void *eloop_data, void *user_data);
+   
+// 注册超时事件处理函数
+int eloop_register_timeout(unsigned int secs, unsigned int usecs, eloop_timeout_handler handler, void *eloop_data, void *user_data);
+   
+// 注册信号事件处理函数,具体要处理的信号由sig参数指定
+int eloop_register_signal(int sig, eloop_signal_handler handler, void *user_data);
+```
+
+接下来看一下 WPAS事件驱动机制的运行原理,其代码在eloop_run函数中 , eloop.c :   
+
+```c
+void eloop_run(void)
+{
+    fd_set *rfds, *wfds, *efds; // fd_set是select中用到的一种参数类型
+    struct timeval _tv;
+    int res;
+    struct os_time tv, now;
+    // 事件驱动循环
+    while (!eloop.terminate &&(!dl_list_empty(&eloop.timeout) || eloop.readers.count > 0 || eloop.writers.count > 0 || eloop.exceptions.count > 0)) {
+        struct eloop_timeout *timeout;
+        // 判断是否有超时事件需要等待
+        timeout = dl_list_first(&eloop.timeout, struct eloop_timeout,list);
+        if (timeout) {
+            os_get_time(&now);
+            if (os_time_before(&now, &timeout->time))
+                os_time_sub(&timeout->time, &now, &tv);
+            else
+                tv.sec = tv.usec = 0;
+            _tv.tv_sec = tv.sec;
+            _tv.tv_usec = tv.usec;
+        }
+        // 将外界设置的读事件添加到对应的fd_set中
+        eloop_sock_table_set_fds(&eloop.readers, rfds);   
+        ......// 设置写、异常事件到fd_set中
+        // 调用select函数
+        res = select(eloop.max_sock + 1, rfds, wfds, efds,timeout ? &_tv : NULL);
+        if(res &lt; 0) {......// 错误处理}
+        // 先处理信号事件
+        eloop_process_pending_signals();
+        // 判断是否有超时事件发生
+        timeout = dl_list_first(&eloop.timeout, struct eloop_timeout,list);
+        if (timeout) {
+            os_get_time(&now);
+            if (!os_time_before(&now, &timeout->time)) {
+                void *eloop_data = timeout->eloop_data;
+                void *user_data = timeout->user_data;
+                eloop_timeout_handler handler = timeout->handler;
+                eloop_remove_timeout(timeout);
+                // 注意,超时事件只执行一次
+                handler(eloop_data, user_data);
+                // 处理超时事件
+            }
+        }
+        ......// 处理读/写/异常事件。方法和下面这个函数类似
+        eloop_sock_table_dispatch(&eloop.readers, rfds);
+        ......// 处理wfds和efds
+    }
+    out:
+        return;
+}
+```
+
+##4.3 wpa_supplicant_add_iface
+wpa_supplicant_add_iface用于向WPAS添加接口设备。 所谓的添加（ add iface） ，其实就是初始化这些设备。   
+
+```c
+struct wpa_supplicant * wpa_supplicant_add_iface(struct wpa_global *global,
+						 struct wpa_interface *iface,
+						 struct wpa_supplicant *parent)
+{
+	struct wpa_supplicant *wpa_s;
+	struct wpa_interface t_iface;
+	struct wpa_ssid *ssid;
+
+	wpa_s = wpa_supplicant_alloc(parent);
+
+	wpa_s->global = global;
+	t_iface = *iface;
+	
+         ......
+
+	if (wpa_supplicant_init_iface(wpa_s, &t_iface)) {
+		wpa_printf(MSG_DEBUG, "Failed to add interface %s",
+			   iface->ifname);
+		wpa_supplicant_deinit_iface(wpa_s, 0, 0);
+		return NULL;
+	}
+
+	wpa_s->next = global->ifaces;
+	global->ifaces = wpa_s;
+
+	wpa_supplicant_set_state(wpa_s, WPA_DISCONNECTED);
+
+	return wpa_s;
+}
+``` 
+
+这里重点需要看一下 wpa_supplicant_init_iface 这个函数 ：   
+
+```c
+static int wpa_supplicant_init_iface(struct wpa_supplicant *wpa_s,
+				     struct wpa_interface *iface)
+{
+	struct wpa_driver_capa capa;
+	int capa_res;
+
+	if (iface->confname) {
+                  ......
+		wpa_s->conf = wpa_config_read(wpa_s->confname, NULL);
+		if (wpa_s->conf == NULL) {
+			wpa_printf(MSG_ERROR, "Failed to read or parse "
+				   "configuration '%s'.", wpa_s->confname);
+			return -1;
+		}
+		wpa_s->confanother = os_rel2abs_path(iface->confanother);
+		wpa_config_read(wpa_s->confanother, wpa_s->conf);
+
+		/*
+		 * Override ctrl_interface and driver_param if set on command
+		 * line.
+		 */
+		if (iface->ctrl_interface) {
+			os_free(wpa_s->conf->ctrl_interface);
+			wpa_s->conf->ctrl_interface =
+				os_strdup(iface->ctrl_interface);
+		}
+
+		if (iface->driver_param) {
+			os_free(wpa_s->conf->driver_param);
+			wpa_s->conf->driver_param =
+				os_strdup(iface->driver_param);
+		}
+
+		if (iface->p2p_mgmt && !iface->ctrl_interface) {
+			os_free(wpa_s->conf->ctrl_interface);
+			wpa_s->conf->ctrl_interface = NULL;
+		}
+	} else
+		wpa_s->conf = wpa_config_alloc_empty(iface->ctrl_interface,
+						     iface->driver_param);
+
+	if (wpa_s->conf == NULL) {
+		wpa_printf(MSG_ERROR, "\nNo configuration found.");
+		return -1;
+	}
+
+	if (iface->ifname == NULL) {
+		wpa_printf(MSG_ERROR, "\nInterface name is required.");
+		return -1;
+	}
+	if (os_strlen(iface->ifname) >= sizeof(wpa_s->ifname)) {
+		wpa_printf(MSG_ERROR, "\nToo long interface name '%s'.",
+			   iface->ifname);
+		return -1;
+	}
+	os_strlcpy(wpa_s->ifname, iface->ifname, sizeof(wpa_s->ifname));
+
+	if (iface->bridge_ifname) {
+		if (os_strlen(iface->bridge_ifname) >=
+		    sizeof(wpa_s->bridge_ifname)) {
+			wpa_printf(MSG_ERROR, "\nToo long bridge interface "
+				   "name '%s'.", iface->bridge_ifname);
+			return -1;
+		}
+		os_strlcpy(wpa_s->bridge_ifname, iface->bridge_ifname,
+			   sizeof(wpa_s->bridge_ifname));
+	}
+
+	/* RSNA Supplicant Key Management - INITIALIZE */
+	eapol_sm_notify_portEnabled(wpa_s->eapol, FALSE);
+	eapol_sm_notify_portValid(wpa_s->eapol, FALSE);
+
+	/* Initialize driver interface and register driver event handler before
+	 * L2 receive handler so that association events are processed before
+	 * EAPOL-Key packets if both become available for the same select()
+	 * call. */
+	if (wpas_init_driver(wpa_s, iface) < 0)
+		return -1;
+
+	if (wpa_supplicant_init_wpa(wpa_s) < 0)
+		return -1;
+
+	wpa_sm_set_ifname(wpa_s->wpa, wpa_s->ifname,
+			  wpa_s->bridge_ifname[0] ? wpa_s->bridge_ifname :
+			  NULL);
+	wpa_sm_set_fast_reauth(wpa_s->wpa, wpa_s->conf->fast_reauth);
+
+	if (wpa_s->conf->dot11RSNAConfigPMKLifetime &&
+	    wpa_sm_set_param(wpa_s->wpa, RSNA_PMK_LIFETIME,
+			     wpa_s->conf->dot11RSNAConfigPMKLifetime)) {
+		wpa_msg(wpa_s, MSG_ERROR, "Invalid WPA parameter value for "
+			"dot11RSNAConfigPMKLifetime");
+		return -1;
+	}
+
+	if (wpa_s->conf->dot11RSNAConfigPMKReauthThreshold &&
+	    wpa_sm_set_param(wpa_s->wpa, RSNA_PMK_REAUTH_THRESHOLD,
+			     wpa_s->conf->dot11RSNAConfigPMKReauthThreshold)) {
+		wpa_msg(wpa_s, MSG_ERROR, "Invalid WPA parameter value for "
+			"dot11RSNAConfigPMKReauthThreshold");
+		return -1;
+	}
+
+	if (wpa_s->conf->dot11RSNAConfigSATimeout &&
+	    wpa_sm_set_param(wpa_s->wpa, RSNA_SA_TIMEOUT,
+			     wpa_s->conf->dot11RSNAConfigSATimeout)) {
+		wpa_msg(wpa_s, MSG_ERROR, "Invalid WPA parameter value for "
+			"dot11RSNAConfigSATimeout");
+		return -1;
+	}
+
+	wpa_s->hw.modes = wpa_drv_get_hw_feature_data(wpa_s,
+						      &wpa_s->hw.num_modes,
+						      &wpa_s->hw.flags);
+	if (wpa_s->hw.modes) {
+		u16 i;
+
+		for (i = 0; i < wpa_s->hw.num_modes; i++) {
+			if (wpa_s->hw.modes[i].vht_capab) {
+				wpa_s->hw_capab = CAPAB_VHT;
+				break;
+			}
+
+			if (wpa_s->hw.modes[i].ht_capab &
+			    HT_CAP_INFO_SUPP_CHANNEL_WIDTH_SET)
+				wpa_s->hw_capab = CAPAB_HT40;
+			else if (wpa_s->hw.modes[i].ht_capab &&
+				 wpa_s->hw_capab == CAPAB_NO_HT_VHT)
+				wpa_s->hw_capab = CAPAB_HT;
+		}
+	}
+
+	capa_res = wpa_drv_get_capa(wpa_s, &capa);
+	if (capa_res == 0) {
+		wpa_s->drv_capa_known = 1;
+		wpa_s->drv_flags = capa.flags;
+		wpa_s->drv_enc = capa.enc;
+		wpa_s->drv_smps_modes = capa.smps_modes;
+		wpa_s->drv_rrm_flags = capa.rrm_flags;
+		wpa_s->probe_resp_offloads = capa.probe_resp_offloads;
+		wpa_s->max_scan_ssids = capa.max_scan_ssids;
+		wpa_s->max_sched_scan_ssids = capa.max_sched_scan_ssids;
+		wpa_s->sched_scan_supported = capa.sched_scan_supported;
+		wpa_s->max_match_sets = capa.max_match_sets;
+		wpa_s->max_remain_on_chan = capa.max_remain_on_chan;
+		wpa_s->max_stations = capa.max_stations;
+		wpa_s->extended_capa = capa.extended_capa;
+		wpa_s->extended_capa_mask = capa.extended_capa_mask;
+		wpa_s->extended_capa_len = capa.extended_capa_len;
+		wpa_s->num_multichan_concurrent =
+			capa.num_multichan_concurrent;
+		wpa_s->wmm_ac_supported = capa.wmm_ac_supported;
+
+		if (capa.mac_addr_rand_scan_supported)
+			wpa_s->mac_addr_rand_supported |= MAC_ADDR_RAND_SCAN;
+		if (wpa_s->sched_scan_supported &&
+		    capa.mac_addr_rand_sched_scan_supported)
+			wpa_s->mac_addr_rand_supported |=
+				(MAC_ADDR_RAND_SCHED_SCAN | MAC_ADDR_RAND_PNO);
+	}
+	if (wpa_s->max_remain_on_chan == 0)
+		wpa_s->max_remain_on_chan = 1000;
+
+	if (wpa_s->drv_flags & WPA_DRIVER_FLAGS_DEDICATED_P2P_DEVICE)
+		wpa_s->p2p_mgmt = iface->p2p_mgmt;
+	else
+		iface->p2p_mgmt = 1;
+
+	if (wpa_s->num_multichan_concurrent == 0)
+		wpa_s->num_multichan_concurrent = 1;
+
+	if (wpa_supplicant_driver_init(wpa_s) < 0)
+		return -1;
+
+
+	if (wpa_s->conf->country[0] && wpa_s->conf->country[1] &&
+	    wpa_drv_set_country(wpa_s, wpa_s->conf->country)) {
+		wpa_dbg(wpa_s, MSG_DEBUG, "Failed to set country");
+		return -1;
+	}
+
+	if (wpas_wps_init(wpa_s))
+		return -1;
+
+	if (wpa_supplicant_init_eapol(wpa_s) < 0)
+		return -1;
+	wpa_sm_set_eapol(wpa_s->wpa, wpa_s->eapol);
+
+	wpa_s->ctrl_iface = wpa_supplicant_ctrl_iface_init(wpa_s);
+
+	wpa_s->gas = gas_query_init(wpa_s);
+	if (wpa_s->gas == NULL) {
+		wpa_printf(MSG_ERROR, "Failed to initialize GAS query");
+		return -1;
+	}
+
+	if (iface->p2p_mgmt && wpas_p2p_init(wpa_s->global, wpa_s) < 0) {
+		wpa_msg(wpa_s, MSG_ERROR, "Failed to init P2P");
+		return -1;
+	}
+
+	if (wpa_bss_init(wpa_s) < 0)
+		return -1;
+
+	if (capa_res == 0 && wpas_set_wowlan_triggers(wpa_s, &capa) < 0)
+		return -1;
+
+
+	if (pcsc_reader_init(wpa_s) < 0)
+		return -1;
+
+	if (wpas_init_ext_pw(wpa_s) < 0)
+		return -1;
+
+	wpas_rrm_reset(wpa_s);
+
+	return 0;
+}
+```
+
