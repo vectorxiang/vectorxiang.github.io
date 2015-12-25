@@ -15,6 +15,13 @@ wpa_supplicant是一个开源软件项目，它实现了Station对无线网络�
 * **支持多种EAP Method**
 * **对各种无线网卡和驱动的支持**
 
+wpa_supplicant_8，主要有四个子目录：   
+
+* hostapd：当手机进入Soft AP模式时，手机将扮演AP的角色，需要hostapd来提供AP的功能   
+* hs20: hotspot2.0   
+* wpa_supplicant：Station模式，也叫Managed模式，这是正常使用wifi连接AP的情况   
+* src：hostapd和wpa_supplicant中都包含一些通用的数据结构和处理方法，这些内容都放在此src目录中   
+
 wpa_supplicant包含两个主要的可执行工具：wpa_supplicant 和 wpa_cli 。wpa_supplicant是核心程序，它和 wpa_cli 的关系就是服务和客户端的关系，在无需显示屏的情况下我们可以直接用 wpa_cli 来操作 wifi.   
 
 #2. wpa_cli

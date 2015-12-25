@@ -1,0 +1,27 @@
+---
+layout: post
+title: "Qualcomm wifi RF test"
+description:
+category: network
+tags: [network, linux]
+mathjax: 
+chart:
+comments: false
+---
+参考自 qcom 文档 ： *80-WL300-27SC WCN36X0 WLAN-BT-FM FTM GUIDE WITH QRCT TEST EXAMPLE (ENGLISH-CHINESE).pdf*   
+
+Qualcomm 的测试方法是让 DUT 进入工厂测试模式(FTM) ，然后使用 QRCT 来启动射频测试 。
+
+####启动FTM 
+如果已经有装载 wifi driver 需先卸载掉   
+adb root
+adb shell rmmod wlan
+adb shell insmod /system/lib/modules/wlan.ko con_mode=5   
+
+adb shell ptt_socket_app -v -d -f
+
+####QRCT测试
+
+* 1. 点击 COM Port，稍等几秒扫描到可用 COM 端口后连接上   
+* 2. 点击 FTM command 然后选择 WLAN ，选择对应的chip ， 点击 FTM Start   
+具体测项参考文档

@@ -1,6 +1,6 @@
 ---
 layout: post
-title: "Android之wifi (一)"
+title: "Android 之 wifi 简介"
 description:
 category: network
 tags: [network, linux]
