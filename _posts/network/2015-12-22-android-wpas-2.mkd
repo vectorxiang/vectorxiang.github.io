@@ -131,4 +131,79 @@ int wpa_supplicant_trigger_scan(struct wpa_supplicant *wpa_s,
 	return 0;
 }
 ```
+wpas_trigger_scan_cb 会去调用 driver interface 中的 scan2 , 目前使用的是 CONFIG_DRIVER_NL80211 ：    
 
+```c
+static int driver_nl80211_scan2(void *priv,
+				struct wpa_driver_scan_params *params)
+{
+	struct i802_bss *bss = priv;
+	return wpa_driver_nl80211_scan(bss, params);
+}
+
+int wpa_driver_nl80211_scan(struct i802_bss *bss,
+			    struct wpa_driver_scan_params *params)
+{
+	struct wpa_driver_nl80211_data *drv = bss->drv;
+	int ret = -1, timeout;
+	struct nl_msg *msg = NULL;
+
+	wpa_dbg(drv->ctx, MSG_DEBUG, "nl80211: scan request");
+	drv->scan_for_auth = 0;
+
+	msg = nl80211_scan_common(bss, NL80211_CMD_TRIGGER_SCAN, params);
+	if (!msg)
+		return -1;
+
+	if (params->p2p_probe) {
+		struct nlattr *rates;
+
+		wpa_printf(MSG_DEBUG, "nl80211: P2P probe - mask SuppRates");
+
+		rates = nla_nest_start(msg, NL80211_ATTR_SCAN_SUPP_RATES);
+		if (rates == NULL)
+			goto fail;
+
+		/*
+		 * Remove 2.4 GHz rates 1, 2, 5.5, 11 Mbps from supported rates
+		 * by masking out everything else apart from the OFDM rates 6,
+		 * 9, 12, 18, 24, 36, 48, 54 Mbps from non-MCS rates. All 5 GHz
+		 * rates are left enabled.
+		 */
+		if (nla_put(msg, NL80211_BAND_2GHZ, 8,
+			    "\x0c\x12\x18\x24\x30\x48\x60\x6c"))
+			goto fail;
+		nla_nest_end(msg, rates);
+
+		if (nla_put_flag(msg, NL80211_ATTR_TX_NO_CCK_RATE))
+			goto fail;
+	}
+
+         // 发送请求给wlan驱动。 返回值只是表示该命令是否正确发送给了驱动。 扫描结束事件将通过 driver event返回给WPAS。
+	ret = send_and_recv_msgs(drv, msg, NULL, NULL);
+	msg = NULL;
+	if (ret) {
+		wpa_printf(MSG_DEBUG, "nl80211: Scan trigger failed: ret=%d "
+			   "(%s)", ret, strerror(-ret));
+		......
+	}
+
+	drv->scan_state = SCAN_REQUESTED;
+	timeout = 10;
+	if (drv->scan_complete_events) {
+		/*
+		 * The driver seems to deliver events to notify when scan is
+		 * complete, so use longer timeout to avoid race conditions
+		 * with scanning and following association request.
+		 */
+		timeout = 30;
+	}
+	eloop_cancel_timeout(wpa_driver_nl80211_scan_timeout, drv, drv->ctx);
+         // timeout 为 10s
+	eloop_register_timeout(timeout, 0, wpa_driver_nl80211_scan_timeout,
+			       drv, drv->ctx);
+
+fail:
+	......
+}
+```

@@ -28,7 +28,7 @@ a:visited { color: #7C7C7C; }
 .wrap:after { content:""; display:table; }
 .wrap:after { clear: both; }
 .wrap {
-    max-width: 830px;
+    max-width: 1000px;
     margin: 0 auto;
     zoom: 1;
     text-align: left;
@@ -220,7 +220,7 @@ a:visited { color: #7C7C7C; }
 /* ----------------------------------------------------------*/
 
 .post {
-    width:800px;
+    width:900px;
     margin:auto;
     padding-bottom: 20px;
 }
@@ -257,7 +257,7 @@ a:visited { color: #7C7C7C; }
 
 .post-content > * {
     margin: 20px 0;
-    font-size: 16px;
+    font-size: 18px;
     line-height: 1.5;
 }
 
@@ -335,7 +335,7 @@ a:visited { color: #7C7C7C; }
 
 pre, code, tt {
     color:#d14;
-  font-size: 12px;
+  font-size: 14px;
   font-family: Consolas, "Liberation Mono", Courier, monospace;
 }
 
