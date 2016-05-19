@@ -1,0 +1,109 @@
+---
+layout: post
+title:  "深入理解Android 笔记之 Netd"
+date:   2016-02-26
+categories: [network]
+---
+#1.简介
+Netd 就是Network Daemon 的缩写，表示Network守护进程，其功能主要包括:     
+
+* 设置防火墙、网络地址转换(NAT)、带宽控制、无线网卡软接入点(Soft Access Point)控制,共享上网(Tether)等。    
+* DNS 信息的缓存和管理。    
+* 网络服务搜索(Net Service Discovery, NSD) 功能，包括服务注册、服务搜索和服务名解析等。
+
+涉及的主要源码位置:   
+Netd: /system/netd/*      
+lib: /system/core/libsyutils/src/*   
+Framework: /frameworks/base/services/core/java/com/android/server/NetworkManagementService.java   
+
+#2.代码
+Netd 进程由 init 进程根据 init.rc 的对应配置项启动:  
+  
+```c
+service netd /system/bin/netd    
+    class main    
+    socket netd stream 0660 root system      
+    socket dnsproxyd stream 0660 root inet      
+    socket mdns stream 0660 root system      
+    socket fwmarkd stream 0660 root inet     
+```
+启动时将创建四个TCP监听 socket ,分别是： netd , dnsproxyd , mdns , fwmarkd 。   
+
+```c
+int main() {
+
+    ......
+
+    ALOGI("Netd 1.0 starting");
+
+    // 屏蔽 SIGPIPE 信号 ， 避免因向断开的连接发送数据而导致进程终止
+    blockSigpipe();
+
+    //创建 NetlinkManager
+    if (!(nm = NetlinkManager::Instance())) {
+        ALOGE("Unable to create NetlinkManager");
+        exit(1);
+    };
+
+    //创建 CommandListener ,它将创建名为 netd 的监听 socket 
+    cl = new CommandListener();
+    //设置 NetlinkManager 的消息发送者 (Broadcaster) 为 CommandListener
+    nm->setBroadcaster((SocketListener *) cl);
+
+    if (nm->start()) {
+        ALOGE("Unable to start NetlinkManager (%s)", strerror(errno));
+        exit(1);
+    }
+
+    // 为 Netd 设置环境变量 ANDROID_DNS_MODE 为 local
+    setenv("ANDROID_DNS_MODE", "local", 1);
+    dpl = new DnsProxyListener(CommandListener::sNetCtrl);
+    if (dpl->startListener()) {
+        ALOGE("Unable to start DnsProxyListener (%s)", strerror(errno));
+        exit(1);
+    }
+
+    mdnsl = new MDnsSdListener();
+    if (mdnsl->startListener()) {
+        ALOGE("Unable to start MDnsSdListener (%s)", strerror(errno));
+        exit(1);
+    }
+
+    fwmarkServer = new FwmarkServer(CommandListener::sNetCtrl);
+    if (fwmarkServer->startListener()) {
+        ALOGE("Unable to start FwmarkServer (%s)", strerror(errno));
+        exit(1);
+    }
+
+
+    if (cl->startListener()) {
+        ALOGE("Unable to start CommandListener (%s)", strerror(errno));
+        exit(1);
+    }
+
+    bool wrote_pid = write_pid_file();
+
+    while(1) {
+        sleep(30); // 30 sec
+        if (!wrote_pid) {
+            wrote_pid = write_pid_file();
+        }
+    }
+
+    ALOGI("Netd exiting");
+    remove_pid_file();
+    exit(0);
+}
+```
+其中 NetlinkManager 主要负责接收并解析来自 Kernel 的三种 uevent ：   
+
+* NETLINK_KOBJECT_UEVENT : 代表 kobject 事件，object 一般用来通知内核中某个模块的加载或卸载。对于NM来说，其关注的是 /sys/class/net下相应模块的加载或卸载消息。    
+* NETLINK_ROUTE : 代表Kernel中routing或link改变时对应的消息。    
+* NETLINK_NFLOG : 和带宽控制有关。Netd中的带宽控制可以设置一个预警值，当网络数据超过一定字节数就会触发Kernel发送一个警告，该功能属于 iptables 的扩展项。    
+
+![](/images/network/android_netd_architecture.png)
+
+另外 Android 中还提供了 ndc 来测试 netd .   
+
+
+ 

@@ -1,6 +1,6 @@
 ---
 layout: post
-title: "Android 之 wpa_supplicant 操作流程"
+title: "Android 之 Scan 流程"
 description:
 category: network
 tags: [network, linux]
@@ -38,7 +38,7 @@ static void wpa_supplicant_ctrl_iface_receive(int sock, void *eloop_ctx,void *so
 	}
 	......// "DETACH"和"LEVEL"命令处理
 	else {
-		// 大部分的命令处理都在wpa_supplicant_ctrl_iface_process函数中
+		// 除了上面3个命令其他的命令处理都在wpa_supplicant_ctrl_iface_process函数中
 		reply = wpa_supplicant_ctrl_iface_process(wpa_s, buf,&reply_len);
 	} 
 	if (reply) {// 回复客户端
@@ -105,42 +105,24 @@ char * wpa_supplicant_ctrl_iface_process(struct wpa_supplicant *wpa_s,
  ==> wpa_supplicant_req_scan
    ===> eloop_register_timeout(sec, usec, wpa_supplicant_scan, wpa_s, NULL);
     ====> wpa_supplicant_trigger_scan
+          radio_add_work(wpa_s, 0, "scan", 0, wpas_trigger_scan_cb, ctx)
+     =====>wpa_drv_scan
 ```
+wpa_drv_scan 会去调用 driver interface 中的 scan2 
 
 ```c
-int wpa_supplicant_trigger_scan(struct wpa_supplicant *wpa_s,
-				struct wpa_driver_scan_params *params)
+static inline int wpa_drv_scan(struct wpa_supplicant *wpa_s,
+			       struct wpa_driver_scan_params *params)
 {
-	struct wpa_driver_scan_params *ctx;
-
-	if (wpa_s->scan_work) {
-		wpa_dbg(wpa_s, MSG_INFO, "Reject scan trigger since one is already pending");
-		return -1;
-	}
-
-	ctx = wpa_scan_clone_params(params);
-	if (ctx == NULL)
-		return -1;
-
-	if (radio_add_work(wpa_s, 0, "scan", 0, wpas_trigger_scan_cb, ctx) < 0)
-	{
-		wpa_scan_free_params(ctx);
-		return -1;
-	}
-
-	return 0;
+	if (wpa_s->driver->scan2)
+		return wpa_s->driver->scan2(wpa_s->drv_priv, params);
+	return -1;
 }
 ```
-wpas_trigger_scan_cb 会去调用 driver interface 中的 scan2 , 目前使用的是 CONFIG_DRIVER_NL80211 ：    
+
+从 Android.mk 中可以看到定义的是 CONFIG_DRIVER_NL80211 ，也就是 nl80211 接口 ：       
 
 ```c
-static int driver_nl80211_scan2(void *priv,
-				struct wpa_driver_scan_params *params)
-{
-	struct i802_bss *bss = priv;
-	return wpa_driver_nl80211_scan(bss, params);
-}
-
 int wpa_driver_nl80211_scan(struct i802_bss *bss,
 			    struct wpa_driver_scan_params *params)
 {
@@ -151,9 +133,8 @@ int wpa_driver_nl80211_scan(struct i802_bss *bss,
 	wpa_dbg(drv->ctx, MSG_DEBUG, "nl80211: scan request");
 	drv->scan_for_auth = 0;
 
+         // 生成 nl_msg 并填充相应的参数 ，cmd 为 NL80211_CMD_TRIGGER_SCAN
 	msg = nl80211_scan_common(bss, NL80211_CMD_TRIGGER_SCAN, params);
-	if (!msg)
-		return -1;
 
 	if (params->p2p_probe) {
 		struct nlattr *rates;
@@ -161,15 +142,6 @@ int wpa_driver_nl80211_scan(struct i802_bss *bss,
 		wpa_printf(MSG_DEBUG, "nl80211: P2P probe - mask SuppRates");
 
 		rates = nla_nest_start(msg, NL80211_ATTR_SCAN_SUPP_RATES);
-		if (rates == NULL)
-			goto fail;
-
-		/*
-		 * Remove 2.4 GHz rates 1, 2, 5.5, 11 Mbps from supported rates
-		 * by masking out everything else apart from the OFDM rates 6,
-		 * 9, 12, 18, 24, 36, 48, 54 Mbps from non-MCS rates. All 5 GHz
-		 * rates are left enabled.
-		 */
 		if (nla_put(msg, NL80211_BAND_2GHZ, 8,
 			    "\x0c\x12\x18\x24\x30\x48\x60\x6c"))
 			goto fail;
@@ -181,25 +153,15 @@ int wpa_driver_nl80211_scan(struct i802_bss *bss,
 
          // 发送请求给wlan驱动。 返回值只是表示该命令是否正确发送给了驱动。 扫描结束事件将通过 driver event返回给WPAS。
 	ret = send_and_recv_msgs(drv, msg, NULL, NULL);
-	msg = NULL;
-	if (ret) {
-		wpa_printf(MSG_DEBUG, "nl80211: Scan trigger failed: ret=%d "
-			   "(%s)", ret, strerror(-ret));
-		......
-	}
+	......
 
 	drv->scan_state = SCAN_REQUESTED;
 	timeout = 10;
 	if (drv->scan_complete_events) {
-		/*
-		 * The driver seems to deliver events to notify when scan is
-		 * complete, so use longer timeout to avoid race conditions
-		 * with scanning and following association request.
-		 */
 		timeout = 30;
 	}
 	eloop_cancel_timeout(wpa_driver_nl80211_scan_timeout, drv, drv->ctx);
-         // timeout 为 10s
+     // 一般情况下,driver完成扫描后需要通知WPAS一个scan complete事件。如果驱动不通知的话,WPAS就会自己去查询driver以获取扫描到的无线网络信息。
 	eloop_register_timeout(timeout, 0, wpa_driver_nl80211_scan_timeout,
 			       drv, drv->ctx);
 
@@ -207,3 +169,5 @@ fail:
 	......
 }
 ```
+接下来 scan message经由netlink进入到Linux内核当中去处理。
+

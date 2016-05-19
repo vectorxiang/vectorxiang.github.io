@@ -1,0 +1,32 @@
+---
+layout: post
+title: "Qualcomm 之 wlan driver"
+description:
+category: network
+tags: [network, linux]
+mathjax: 
+chart:
+comments: false
+---
+Qualcomm Android wlan driver 的代码路径在 ：   
+*/vendor/qcom/opensource/wlan/prima*    
+
+其中在 /CORE 下包含多个文件夹:    
+
+![](/images/network/wlan_driver_files.png)   
+
+这里每个目录的作用可以通过如下图来理解 ：    
+
+![](/images/network/wlan_driver_architeture.png)   
+
+* **HDD** : Host device driver , HOST SW 到 HLOS 具体 network driver 的接口    
+* **SME** : Station management entity       
+* **WDA** ： WLAN Device Adaptation    
+* **WDI** ： WLAN Device Interface   
+* **TL** : Transport layer , 处理接收到和要发送的数据帧   
+* **VOSS** ： Virtual Operating System Services
+
+
+
+
+
