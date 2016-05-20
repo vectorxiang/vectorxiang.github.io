@@ -81,7 +81,8 @@ categories: [network]
 ```
 到这里上层scan 结束， 下面看搜到 event 的处理    
 
-wpa_supplicant 发出 CTRL-EVENT-SCAN-RESULTS 给 WifiMonito , 在 dispatchEvent 中向 WifiStateMachine 发送 SCAN_RESULTS_EVENT ,处理的地方是 SupplicantStartedState
+wpa_supplicant 发出 CTRL-EVENT-SCAN-RESULTS 给 WifiMonito , 在 dispatchEvent 中向 WifiStateMachine 发送 SCAN_RESULTS_EVENT ,处理的地方是 SupplicantStartedState   
+
 ```java
                 case WifiMonitor.SCAN_FAILED_EVENT:
                     maybeRegisterNetworkFactory(); // Make sure our NetworkFactory is registered
@@ -98,26 +99,39 @@ wpa_supplicant 发出 CTRL-EVENT-SCAN-RESULTS 给 WifiMonito , 在 dispatchEvent
                     if (mBufferedScanMsg.size() > 0)
                         sendMessage(mBufferedScanMsg.remove());
                     break;
-```   
-在 setScanResults 中先向 wpas 下 “BSS RANGE=0- MASK=0x21987” 获取搜索结果,获取到的结果如下，每个AP之间用"===="分割，末尾以“####”来表示结束    
-```c
-id=8730
-bssid=38:83:45:0d:54:42
-freq=2472
-level=-75
-tsf=0000207703501464
-flags=[WPA2-PSK-CCMP+TKIP-preauth][ESS]
-ssid=POWER-NB
-====
-id=8731
-bssid=c8:60:00:93:f2:5a
-freq=2467
-level=-76
-tsf=0000207703501484
-flags=[WPA2-PSK-CCMP][ESS]
-ssid=ASUS 2.4G
-####
+```  
+ 
+在 setScanResults 中先向 wpas 下 “BSS RANGE=0- MASK=0x21987” 获取搜索结果,获取到的结果如下，每个AP之间用"===="分割，末尾以“####”来表示结束     
+   
+```c 
+	id=8730
+	bssid=38:83:45:0d:54:42
+	freq=2472
+	level=-75
+	tsf=0000207703501464
+	flags=[WPA2-PSK-CCMP+TKIP-preauth][ESS]
+	ssid=POWER-NB
+	====
+	id=8731
+	bssid=c8:60:00:93:f2:5a
+	freq=2467
+	level=-76
+	tsf=0000207703501484
+	flags=[WPA2-PSK-CCMP][ESS]
+	ssid=ASUS 2.4G
+	####
 ```    
+搜索结构先保存在 mScanResults 这个 List<ScanDetail> 中， 将新搜索到的ap 加入到 mScanResultCache 中。   
+
+而在 sendScanResultsAvailableBroadcast 中会发送 WifiManager.SCAN_RESULTS_AVAILABLE_ACTION 的 broadcast, Settings 中由 frameworks 中的 WifiTracker 中处理该事件   
+```java
+            } else if (WifiManager.SCAN_RESULTS_AVAILABLE_ACTION.equals(action) ||
+                    WifiManager.CONFIGURED_NETWORKS_CHANGED_ACTION.equals(action) ||
+                    WifiManager.LINK_CONFIGURATION_CHANGED_ACTION.equals(action)) {
+                mWorkHandler.sendEmptyMessage(WorkHandler.MSG_UPDATE_ACCESS_POINTS);
+```    
+最后都是在 updateAccessPoints 中处理 , 主要是将搜索结果解析之后保存到 mAccessPoints ,并发 MSG_ACCESS_POINT_CHANGED 。    
+这个 event 的处理会调用到上层注册的 mListener.onConnectedChanged() , 这样回到 Settings 中的 WifiSettings 中重绘搜索列表。    
 
 
 
