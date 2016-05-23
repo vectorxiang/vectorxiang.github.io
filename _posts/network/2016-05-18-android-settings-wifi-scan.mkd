@@ -120,7 +120,8 @@ wpa_supplicant 发出 CTRL-EVENT-SCAN-RESULTS 给 WifiMonito , 在 dispatchEvent
 	flags=[WPA2-PSK-CCMP][ESS]
 	ssid=ASUS 2.4G
 	####
-```    
+```  
+
 搜索结构先保存在 mScanResults 这个 List<ScanDetail> 中， 将新搜索到的ap 加入到 mScanResultCache 中。   
 
 而在 sendScanResultsAvailableBroadcast 中会发送 WifiManager.SCAN_RESULTS_AVAILABLE_ACTION 的 broadcast, Settings 中由 frameworks 中的 WifiTracker 中处理该事件    
