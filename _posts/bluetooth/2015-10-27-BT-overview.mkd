@@ -2,7 +2,7 @@
 layout: post
 title:  "Bluetooth Overview"
 date:   2015-10-27
-categories: [Bluetooth]
+categories: [bluetooth]
 ---
 
 #RADIO SPECIFICATION

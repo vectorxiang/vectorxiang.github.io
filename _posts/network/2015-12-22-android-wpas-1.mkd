@@ -47,7 +47,10 @@ wpa_cli 的 常用参数有 ：
 * reconnect
 * save_config
 
-使用前需先加载 wifi driver 并且启动 wpas 。   
+使用前需先加载 wifi driver 并且启动 wpas 。  
+
+adb shell insmod  /system/lib/modules/wlan.ko    
+adb shell /system/bin/wpa_supplicant -i p2p0 -Dnl80211 -c /data/misc/wifi/p2p_supplicant.conf -N -i wlan0 -Dnl80211 -c /data/misc/wifi/wpa_supplicant.conf -dddd -e /data/misc/wifi/entropy.bin &     
 
 ![](/images/network/android_wifi_wpa_cli_test1.jpg)   
 ![](/images/network/android_wifi_wpa_cli_test2.jpg)    
@@ -69,7 +72,7 @@ WPAS主要包含如下几个重要模块：
 
 * configuration , WPAS支持较多的配置参数，这些参数的处理由configuration模块完成.
 
-* WPAS是C/S结构中的Server端，它通过ctrl i/f模块向客户端提供通信接口。Linux/Unix平台中，Client端利用Unix域socket与其通信。目前常用的Client端wpa_cli（无界面的命令行程序）和wpa_gui（UI用Qt实现）。
+WPAS是C/S结构中的Server端，它通过ctrl i/f模块向客户端提供通信接口。Linux/Unix平台中，Client端利用Unix域socket与其通信。目前常用的Client端wpa_cli（无界面的命令行程序）和wpa_gui（UI用Qt实现）。
 
 #4. WPAS的初始化
 在 Android 系统中启动 wpas 是通过 “setprop ctrl.start wpa_supplicant” ，其定义在 init.qcom.rc 中:   
@@ -386,12 +389,12 @@ struct wpa_supplicant * wpa_supplicant_add_iface(struct wpa_global *global,
 {
 	struct wpa_supplicant *wpa_s;
 	struct wpa_interface t_iface;
-	struct wpa_ssid *ssid;
+	struct wpa_ssid *ssid;		//用于存储某个无线网络的配置信息,wpa_supplicant.conf中的每个network项都对应一个wpa_ssid对象
 
 	wpa_s = wpa_supplicant_alloc(parent);
 
 	wpa_s->global = global;
-	t_iface = *iface;
+	t_iface = *iface;		
 	
          ......
 
@@ -422,19 +425,13 @@ static int wpa_supplicant_init_iface(struct wpa_supplicant *wpa_s,
 
 	if (iface->confname) {
                   ......
+		//解析配置文件，例如 wpa_s->confname 为"/datnl80211_global_inita/misc/wifi/wpa_supplicant.conf"
 		wpa_s->conf = wpa_config_read(wpa_s->confname, NULL);
-		if (wpa_s->conf == NULL) {
-			wpa_printf(MSG_ERROR, "Failed to read or parse "
-				   "configuration '%s'.", wpa_s->confname);
-			return -1;
-		}
+		......
 		wpa_s->confanother = os_rel2abs_path(iface->confanother);
 		wpa_config_read(wpa_s->confanother, wpa_s->conf);
 
-		/*
-		 * Override ctrl_interface and driver_param if set on command
-		 * line.
-		 */
+		//保存driver相关参数
 		if (iface->ctrl_interface) {
 			os_free(wpa_s->conf->ctrl_interface);
 			wpa_s->conf->ctrl_interface =
@@ -455,44 +452,19 @@ static int wpa_supplicant_init_iface(struct wpa_supplicant *wpa_s,
 		wpa_s->conf = wpa_config_alloc_empty(iface->ctrl_interface,
 						     iface->driver_param);
 
-	if (wpa_s->conf == NULL) {
-		wpa_printf(MSG_ERROR, "\nNo configuration found.");
-		return -1;
-	}
+	......
 
-	if (iface->ifname == NULL) {
-		wpa_printf(MSG_ERROR, "\nInterface name is required.");
-		return -1;
-	}
-	if (os_strlen(iface->ifname) >= sizeof(wpa_s->ifname)) {
-		wpa_printf(MSG_ERROR, "\nToo long interface name '%s'.",
-			   iface->ifname);
-		return -1;
-	}
 	os_strlcpy(wpa_s->ifname, iface->ifname, sizeof(wpa_s->ifname));
-
-	if (iface->bridge_ifname) {
-		if (os_strlen(iface->bridge_ifname) >=
-		    sizeof(wpa_s->bridge_ifname)) {
-			wpa_printf(MSG_ERROR, "\nToo long bridge interface "
-				   "name '%s'.", iface->bridge_ifname);
-			return -1;
-		}
-		os_strlcpy(wpa_s->bridge_ifname, iface->bridge_ifname,
-			   sizeof(wpa_s->bridge_ifname));
-	}
-
+	......
 	/* RSNA Supplicant Key Management - INITIALIZE */
 	eapol_sm_notify_portEnabled(wpa_s->eapol, FALSE);
 	eapol_sm_notify_portValid(wpa_s->eapol, FALSE);
 
-	/* Initialize driver interface and register driver event handler before
-	 * L2 receive handler so that association events are processed before
-	 * EAPOL-Key packets if both become available for the same select()
-	 * call. */
+	//初始化相应的driver
 	if (wpas_init_driver(wpa_s, iface) < 0)
 		return -1;
 
+	//初始化wpa_sm相关的资源
 	if (wpa_supplicant_init_wpa(wpa_s) < 0)
 		return -1;
 
@@ -501,78 +473,16 @@ static int wpa_supplicant_init_iface(struct wpa_supplicant *wpa_s,
 			  NULL);
 	wpa_sm_set_fast_reauth(wpa_s->wpa, wpa_s->conf->fast_reauth);
 
-	if (wpa_s->conf->dot11RSNAConfigPMKLifetime &&
-	    wpa_sm_set_param(wpa_s->wpa, RSNA_PMK_LIFETIME,
-			     wpa_s->conf->dot11RSNAConfigPMKLifetime)) {
-		wpa_msg(wpa_s, MSG_ERROR, "Invalid WPA parameter value for "
-			"dot11RSNAConfigPMKLifetime");
-		return -1;
-	}
-
-	if (wpa_s->conf->dot11RSNAConfigPMKReauthThreshold &&
-	    wpa_sm_set_param(wpa_s->wpa, RSNA_PMK_REAUTH_THRESHOLD,
-			     wpa_s->conf->dot11RSNAConfigPMKReauthThreshold)) {
-		wpa_msg(wpa_s, MSG_ERROR, "Invalid WPA parameter value for "
-			"dot11RSNAConfigPMKReauthThreshold");
-		return -1;
-	}
-
-	if (wpa_s->conf->dot11RSNAConfigSATimeout &&
-	    wpa_sm_set_param(wpa_s->wpa, RSNA_SA_TIMEOUT,
-			     wpa_s->conf->dot11RSNAConfigSATimeout)) {
-		wpa_msg(wpa_s, MSG_ERROR, "Invalid WPA parameter value for "
-			"dot11RSNAConfigSATimeout");
-		return -1;
-	}
+	.......
 
 	wpa_s->hw.modes = wpa_drv_get_hw_feature_data(wpa_s,
 						      &wpa_s->hw.num_modes,
 						      &wpa_s->hw.flags);
-	if (wpa_s->hw.modes) {
-		u16 i;
-
-		for (i = 0; i < wpa_s->hw.num_modes; i++) {
-			if (wpa_s->hw.modes[i].vht_capab) {
-				wpa_s->hw_capab = CAPAB_VHT;
-				break;
-			}
-
-			if (wpa_s->hw.modes[i].ht_capab &
-			    HT_CAP_INFO_SUPP_CHANNEL_WIDTH_SET)
-				wpa_s->hw_capab = CAPAB_HT40;
-			else if (wpa_s->hw.modes[i].ht_capab &&
-				 wpa_s->hw_capab == CAPAB_NO_HT_VHT)
-				wpa_s->hw_capab = CAPAB_HT;
-		}
-	}
+	......
 
 	capa_res = wpa_drv_get_capa(wpa_s, &capa);
 	if (capa_res == 0) {
-		wpa_s->drv_capa_known = 1;
-		wpa_s->drv_flags = capa.flags;
-		wpa_s->drv_enc = capa.enc;
-		wpa_s->drv_smps_modes = capa.smps_modes;
-		wpa_s->drv_rrm_flags = capa.rrm_flags;
-		wpa_s->probe_resp_offloads = capa.probe_resp_offloads;
-		wpa_s->max_scan_ssids = capa.max_scan_ssids;
-		wpa_s->max_sched_scan_ssids = capa.max_sched_scan_ssids;
-		wpa_s->sched_scan_supported = capa.sched_scan_supported;
-		wpa_s->max_match_sets = capa.max_match_sets;
-		wpa_s->max_remain_on_chan = capa.max_remain_on_chan;
-		wpa_s->max_stations = capa.max_stations;
-		wpa_s->extended_capa = capa.extended_capa;
-		wpa_s->extended_capa_mask = capa.extended_capa_mask;
-		wpa_s->extended_capa_len = capa.extended_capa_len;
-		wpa_s->num_multichan_concurrent =
-			capa.num_multichan_concurrent;
-		wpa_s->wmm_ac_supported = capa.wmm_ac_supported;
-
-		if (capa.mac_addr_rand_scan_supported)
-			wpa_s->mac_addr_rand_supported |= MAC_ADDR_RAND_SCAN;
-		if (wpa_s->sched_scan_supported &&
-		    capa.mac_addr_rand_sched_scan_supported)
-			wpa_s->mac_addr_rand_supported |=
-				(MAC_ADDR_RAND_SCHED_SCAN | MAC_ADDR_RAND_PNO);
+		...... //相关capability信息
 	}
 	if (wpa_s->max_remain_on_chan == 0)
 		wpa_s->max_remain_on_chan = 1000;
@@ -610,25 +520,36 @@ static int wpa_supplicant_init_iface(struct wpa_supplicant *wpa_s,
 		return -1;
 	}
 
-	if (iface->p2p_mgmt && wpas_p2p_init(wpa_s->global, wpa_s) < 0) {
-		wpa_msg(wpa_s, MSG_ERROR, "Failed to init P2P");
+	......
+
+	return 0;
+}
+```
+这里看一下 wpas_init_driver ：
+
+```c
+static int wpas_init_driver(struct wpa_supplicant *wpa_s,
+			    struct wpa_interface *iface)
+{
+	const char *ifname, *driver, *rn;
+
+	driver = iface->driver;
+next_driver:
+	//根据nl80211找到wpa_driver数组中nl80211指定的driver对象 wpa_driver_nl80211_ops ,并调用其 global_init
+	//global_init 会创建netlink_socket 来接收kernel 中的消息
+	if (wpa_supplicant_set_driver(wpa_s, driver) < 0)
+		return -1;
+
+	//调用 wpa_driver_nl80211_ops 的 init2
+	wpa_s->drv_priv = wpa_drv_init(wpa_s, wpa_s->ifname);
+	......
+	if (wpa_drv_set_param(wpa_s, wpa_s->conf->driver_param) < 0) {
+		wpa_msg(wpa_s, MSG_ERROR, "Driver interface rejected "
+			"driver_param '%s'", wpa_s->conf->driver_param);
 		return -1;
 	}
 
-	if (wpa_bss_init(wpa_s) < 0)
-		return -1;
-
-	if (capa_res == 0 && wpas_set_wowlan_triggers(wpa_s, &capa) < 0)
-		return -1;
-
-
-	if (pcsc_reader_init(wpa_s) < 0)
-		return -1;
-
-	if (wpas_init_ext_pw(wpa_s) < 0)
-		return -1;
-
-	wpas_rrm_reset(wpa_s);
+	......
 
 	return 0;
 }
