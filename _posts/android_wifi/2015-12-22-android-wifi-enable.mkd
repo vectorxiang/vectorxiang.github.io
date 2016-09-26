@@ -2,8 +2,8 @@
 layout: post
 title: "Android之 wifi enable 流程"
 description:
-category: network
-tags: [network, linux]
+category: android wifi
+tags: [network, android , wifi]
 mathjax: 
 chart:
 comments: false

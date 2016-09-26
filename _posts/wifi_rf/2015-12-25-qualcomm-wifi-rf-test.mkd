@@ -2,8 +2,8 @@
 layout: post
 title: "Qualcomm wifi RF test"
 description:
-category: network
-tags: [network, linux]
+category: wifi_rf
+tags: [rf, android , wifi]
 mathjax: 
 chart:
 comments: false

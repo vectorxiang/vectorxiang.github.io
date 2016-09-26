@@ -2,8 +2,8 @@
 layout: post
 title: "Android之wifi wpa_supplicant"
 description:
-category: network
-tags: [network, linux]
+category: android wifi
+tags: [network, android , wifi, linux]
 mathjax: 
 chart:
 comments: false

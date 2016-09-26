@@ -1,0 +1,81 @@
+---
+layout: post
+title: "wifi bettery"
+description:
+category: android wifi
+tags: [network, android , wifi]
+mathjax: 
+chart:
+comments: false
+---
+
+```c
+    public void calculateApp(BatterySipper app, BatteryStats.Uid u, long rawRealtimeUs,
+                             long rawUptimeUs, int statsType) {
+        app.wifiRxPackets = u.getNetworkActivityPackets(BatteryStats.NETWORK_WIFI_RX_DATA,
+                statsType);
+        app.wifiTxPackets = u.getNetworkActivityPackets(BatteryStats.NETWORK_WIFI_TX_DATA,
+                statsType);
+        app.wifiRxBytes = u.getNetworkActivityBytes(BatteryStats.NETWORK_WIFI_RX_DATA,
+                statsType);
+        app.wifiTxBytes = u.getNetworkActivityBytes(BatteryStats.NETWORK_WIFI_TX_DATA,
+                statsType);
+        //wifi数据耗电
+        final double wifiPacketPower = (app.wifiRxPackets + app.wifiTxPackets)
+                * mWifiPowerPerPacket;
+
+        //wifi运行耗电
+        app.wifiRunningTimeMs = u.getWifiRunningTime(rawRealtimeUs, statsType) / 1000;
+        mTotalAppWifiRunningTimeMs += app.wifiRunningTimeMs;
+        final double wifiLockPower = (app.wifiRunningTimeMs * mWifiPowerOn) / (1000*60*60);
+
+        //wifi扫描耗电
+        final long wifiScanTimeMs = u.getWifiScanTime(rawRealtimeUs, statsType) / 1000;
+        final double wifiScanPower = (wifiScanTimeMs * mWifiPowerScan) / (1000*60*60);
+
+        double wifiBatchScanPower = 0;
+        for (int bin = 0; bin < BatteryStats.Uid.NUM_WIFI_BATCHED_SCAN_BINS; bin++) {
+            final long batchScanTimeMs =
+                    u.getWifiBatchedScanTime(bin, rawRealtimeUs, statsType) / 1000;
+            final double batchScanPower = (batchScanTimeMs * mWifiPowerBatchScan) / (1000*60*60);
+            wifiBatchScanPower += batchScanPower;
+        }
+
+        app.wifiPowerMah = wifiPacketPower + wifiLockPower + wifiScanPower + wifiBatchScanPower;
+        if (DEBUG && app.wifiPowerMah != 0) {
+            Log.d(TAG, "UID " + u.getUid() + ": power=" +
+                    BatteryStatsHelper.makemAh(app.wifiPowerMah));
+        }
+    }
+```
+其中 mWifiPowerPerPacket ， mWifiPowerOn ， mWifiPowerScan ， mWifiPowerScan 都是从 power_profile.xml读取的各个器件的电源消耗参数。
+
+所以只需要看一下时间的计算，先来追一下 wifiRunningTimeMs ：
+```c
+        public long getWifiRunningTime(long elapsedRealtimeUs, int which) {
+            if (mWifiRunningTimer == null) {
+                return 0;
+            }
+            return mWifiRunningTimer.getTotalTimeLocked(elapsedRealtimeUs, which);
+        }
+```
+所以只需要在最追一下 mWifiRunningTimer 的设定
+```c
+        public void noteWifiRunningLocked(long elapsedRealtimeMs) {
+            if (!mWifiRunning) {
+                mWifiRunning = true;
+                if (mWifiRunningTimer == null) {
+                    mWifiRunningTimer = new StopwatchTimer(Uid.this, WIFI_RUNNING,
+                            mWifiRunningTimers, mOnBatteryTimeBase);
+                }
+                mWifiRunningTimer.startRunningLocked(elapsedRealtimeMs);
+            }
+        }
+
+        public void noteWifiStoppedLocked(long elapsedRealtimeMs) {
+            if (mWifiRunning) {
+                mWifiRunning = false;
+                mWifiRunningTimer.stopRunningLocked(elapsedRealtimeMs);
+            }
+        }
+```

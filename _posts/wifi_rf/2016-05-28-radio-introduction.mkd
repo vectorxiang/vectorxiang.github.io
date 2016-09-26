@@ -2,8 +2,8 @@
 layout: post
 title: "无线电原理简介"
 description:
-category: wifi
-tags: [wifi]
+category: wifi_rf
+tags: [rf]
 mathjax: 
 chart:
 comments: false

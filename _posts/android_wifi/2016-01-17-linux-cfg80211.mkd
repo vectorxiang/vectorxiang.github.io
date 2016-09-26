@@ -2,8 +2,8 @@
 layout: post
 title: "Linux 之 cfg80211"
 description:
-category: network
-tags: [network, linux]
+category: android wifi
+tags: [network, android , wifi, linux]
 mathjax: 
 chart:
 comments: false

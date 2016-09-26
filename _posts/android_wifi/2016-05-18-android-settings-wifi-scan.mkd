@@ -2,7 +2,8 @@
 layout: post
 title:  "Wifi Scan in Settings"
 date:   2016-05-18
-categories: [network]
+category: android wifi
+tags: [network, android , wifi]
 ---
 
 从点击 Settings Wifi界面中"refresh" 开始追代码流程 :

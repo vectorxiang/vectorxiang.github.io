@@ -2,8 +2,8 @@
 layout: post
 title: "Android 之 wifi 简介"
 description:
-category: network
-tags: [network, linux]
+category: android wifi
+tags: [network, android , wifi]
 mathjax: 
 chart:
 comments: false
