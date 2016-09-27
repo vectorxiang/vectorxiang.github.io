@@ -136,7 +136,8 @@ pmf=1
 external_sim=1
 key_mgmt_offload=1
  
-#wpa_supplicant运行过程中得到的无线网络信息都会通过”network“配置项保存到配置文件中，如果该信息完整，一旦wpa_supplicant找到该无线网络就会尝试用保存的信息去加入它。
+#wpa_supplicant运行过程中得到的无线网络信息都会通过”network“配置项保存到配置文件中，如果该信息完整，
+一旦wpa_supplicant找到该无线网络就会尝试用保存的信息去加入它。
 network={
     ssid="My ASUS"
     psk="123456789"

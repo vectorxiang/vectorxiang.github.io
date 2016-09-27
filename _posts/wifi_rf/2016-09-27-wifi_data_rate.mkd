@@ -1,0 +1,23 @@
+---
+layout: post
+title: "WIFI data rate"
+description:
+category: wifi_rf
+tags: [rf,wifi]
+mathjax: 
+chart:
+comments: false
+---
+802.11n 射频速率的配置通过MCS（Modulation and Coding Scheme，调制与编码策略）索引值实现。      
+MCS调制编码表是802.11n为表征WLAN的通讯速率而提出的一种表示形式。MCS将所关注的影响通讯速率的因素作为表的列，将MCS索引作为行，形成一张速率表。   
+802.11n 最大支持 40MHz 的频宽， 支持最大 4*4 空间串流 (MIMO Spatial Streams), MCS 索引值为0~31 , 下表列出但空间流下的速率，多空间流的速率可以通过 *n 来计算得出     
+
+![](/images/network/wifi_11n_data_rate.PNG)     
+
+11ac 支持更宽的频宽， 最高到160Mhz , 同时支持最大 8*8 的空间流，此外相比11n额外增加了 256-QAM(3/4 or 5/6 coding rate) 调变方式，256-QAM 相比64-QAM再传输流量上有33%的提高，但位错误容许误差也较低，适合用于无干扰的通讯环境。    
+因此在单空间流的情况下 ，11ac的 MCS 索引值为0~9 :      
+
+![](/images/network/wifi_11ac_data_rate.PNG)    
+
+
+
