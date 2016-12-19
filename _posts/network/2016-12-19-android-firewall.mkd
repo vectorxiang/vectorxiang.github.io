@@ -1,0 +1,103 @@
+---
+layout: post
+title:  "Android Firewall debug 记录"
+date:   2016-12-19
+categories: [network]
+---
+> bug： 手机在连上wifi之后， 熄屏静置 10 min 以上发现无法ping 到手机，一直显示超时。
+
+从log 中可以看到在大约 10 min时有出现 "enable FIREWALL_CHAIN_DOZABLE " 相关的log， 然后顺着往下追:    
+ 
+```java
+/* frameworks/base/services/core/java/com/android/server/NetworkManagementService.java */
+    public void setFirewallChainEnabled(int chain, boolean enable) {
+        enforceSystemUid();
+        synchronized (mQuotaLock) {
+            ......
+            final String operation = enable ? "enable_chain" : "disable_chain";
+            final String chainName;
+            switch(chain) {
+                ......
+                case FIREWALL_CHAIN_DOZABLE:
+                    chainName = FIREWALL_CHAIN_NAME_DOZABLE;
+                    break;
+                ......
+            }
+
+            try {
+                mConnector.execute("firewall", operation, chainName);
+            } catch (NativeDaemonConnectorException e) {
+                throw e.rethrowAsParcelableException();
+            }
+	   ......
+        }
+    }
+```
+
+其中:   
+
+```java
+private final NativeDaemonConnector mConnector;
+```
+NativeDaemonConnector 中维护着与 Netd 中 CommandListener 相关的内部socket线程，NetworkManagementService 就是通过它来和 Netd 进行通信，发送command .
+
+```c
+/* system/netd/server/CommandListener.cpp */
+int CommandListener：：FirewallCmd::runCommand(SocketClient *cli, int argc, char **argv){
+    if (!strcmp(argv[1], "enable_chain")) {
+        if (argc != 3) {
+            cli->sendMsg(ResponseCode::CommandSyntaxError,
+                         "Usage: firewall enable_chain <dozable|standby>",
+                         false);
+            return 0;
+        }
+
+        ChildChain childChain = parseChildChain(argv[2]);
+        int res = gCtls->firewallCtrl.enableChildChains(childChain, true);
+        return sendGenericOkFail(cli, res);
+    }
+}
+
+/* system/netd/server/FirewallController.cpp */
+int FirewallController::enableChildChains(ChildChain chain, bool enable) {
+    int res = 0;
+    const char* name;
+    switch(chain) {
+        case DOZABLE:
+            name = LOCAL_DOZABLE;
+            break;
+        case STANDBY:
+            name = LOCAL_STANDBY;
+            break;
+        case POWERSAVE:
+            name = LOCAL_POWERSAVE;
+            break;
+        default:
+            return res;
+    }
+
+    if (enable) {
+        res |= attachChain(name, LOCAL_INPUT);
+        res |= attachChain(name, LOCAL_OUTPUT);
+    } else {
+        res |= detachChain(name, LOCAL_INPUT);
+        res |= detachChain(name, LOCAL_OUTPUT);
+    }
+    return res;
+}
+
+int FirewallController::attachChain(const char* childChain, const char* parentChain) {
+    return execIptables(V4V6, "-t", TABLE, "-A", parentChain, "-j", childChain, NULL);
+}
+```
+这里最后调用的还是 iptables , 其中 V4V6 的作用是调用判断调用 iptables 还是 ip6tables。 上面command 的意思是将doze chain 加到 filter table 中的 INPUT 和 OUTPUT 中。iptable 的用法网上资料很多，介绍一个: [http://blog.csdn.net/wlzx120/article/details/52300774](http://blog.csdn.net/wlzx120/article/details/52300774)   
+
+
+大概看一下这里 doze chain 的内容:     
+
+<center>![](/images/network/android_iptable_doze.png)</center> 
+这里可以看到会先检查前面的3个rule ， 如果有符合的直接return 否则检查到最后一项全部 drop.  这里在大概看一下第一项中的 "owner UID match u0_a26" ，这里需要查询一下 u0_a26 表示的package.    
+这里 u0_a26 的打印方式可以参考 [https://zhuanlan.zhihu.com/p/22620803?refer=kelvin-love-wmy](https://zhuanlan.zhihu.com/p/22620803?refer=kelvin-love-wmy) , 这里 u0_a26 即为UID 10026, 通过 UID 可以在 /data/system/packages.list 中查询到. 
+
+
+

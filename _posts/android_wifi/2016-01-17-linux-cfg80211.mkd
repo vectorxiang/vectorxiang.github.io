@@ -1,6 +1,6 @@
 ---
 layout: post
-title: "Linux 之 cfg80211"
+title: "Linux 之 nl80211 & cfg80211"
 description:
 category: android wifi
 tags: [network, android , wifi, linux]
@@ -8,8 +8,8 @@ mathjax:
 chart:
 comments: false
 ---
-#关于 cfg80211    
-在 Linux 系统中提供了两套配置 802.11 的接口，分别是 wext ( Wireless Extensions 无线扩展接口) 和 nl80211 接口。    
+#关于 nl80211    
+为从用户空间控制无线驱动程序 ， 在 Linux 系统中提供了两套配置 802.11 的接口，分别是 wext ( Wireless Extensions 无线扩展接口) 和 nl80211 接口。    
 
 wext的接口实现上，应用层采用ioctl方式访问驱动，设置无线参数或者获取无线参数，配置无线驱动进行联网操作。无线驱动事件到应用层的传递采用的netlink socket技术，一种netlink route消息技术。但在linux-2.6.25 之后，wext API接口版本停止在V22就不再进行更新了。而替代其的是nl80211接口。    
 
