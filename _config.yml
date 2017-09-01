@@ -9,7 +9,7 @@ author: "vector"
 # Build settings
 # permalink: date
 
-highlighter: pygments
+highlighter: rouge
 markdown: kramdown
 redcarpet:
   extensions: [fenced_code_blocks,no_intra_emphasis,strikethrough,no_intra_emphasis,autolink,tables]
