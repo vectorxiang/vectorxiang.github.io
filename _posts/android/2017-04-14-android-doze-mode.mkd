@@ -1,0 +1,109 @@
+---
+layout: post
+title:  "Android Doze mode"
+date:   2017-04-14
+categories: [Android]
+---
+大部分内容来自于 [http://blog.csdn.net/gaugamela/article/details/52981984](http://blog.csdn.net/gaugamela/article/details/52981984)
+
+代码基本上都在 /frameworks/base/services/core/java/com/android/server/DeviceIdleController.java    
+
+DeviceIdleController 作为一个系统级服务在开机时由 SystemServer 初始化启动     
+ 
+```java
+    private void startOtherServices() {
+                ......
+                mSystemServiceManager.startService(DeviceIdleController.class);    
+```
+开机过程中依次调用到 DeviceIdleController 的 构造函数 -> onStart -> onBootPhase    
+
+###构造函数
+```java
+    public DeviceIdleController(Context context) {
+        super(context);
+        // 路径是 /data/system/deviceidle.xml, 用于定义idle模式也能正常工作的非系统应用
+        mConfigFile = new AtomicFile(new File(getSystemDir(), "deviceidle.xml"));
+        mHandler = new MyHandler(BackgroundThread.getHandler().getLooper());
+    }
+```
+
+###onStart
+```java
+public void onStart() {
+    final PackageManager pm = getContext().getPackageManager();
+
+    synchronized (this) {
+        //读取配置文件，判断Doze模式是否允许被开启, 这里会有区分 light 和 deep
+        mLightEnabled = mDeepEnabled = getContext().getResources().getBoolean(
+                com.android.internal.R.bool.config_enableAutoPowerModes);
+
+        //分析PKMS时提到过，PKMS扫描系统目录的xml，将形成SystemConfig
+        SystemConfig sysConfig = SystemConfig.getInstance();
+
+        //获取除了device Idle模式外，都可以运行的系统应用白名单
+        ArraySet<String> allowPowerExceptIdle = sysConfig.getAllowInPowerSaveExceptIdle();
+        for (int i=0; i<allowPowerExceptIdle.size(); i++) {
+            String pkg = allowPowerExceptIdle.valueAt(i);
+            try {
+                ApplicationInfo ai = pm.getApplicationInfo(pkg,
+                        PackageManager.MATCH_SYSTEM_ONLY);
+                int appid = UserHandle.getAppId(ai.uid);
+                mPowerSaveWhitelistAppsExceptIdle.put(ai.packageName, appid);
+                mPowerSaveWhitelistSystemAppIdsExceptIdle.put(appid, true);
+            } catch (PackageManager.NameNotFoundException e) {
+            }
+        }
+
+        //获取device Idle模式下，也可以运行的系统应用白名单
+        ArraySet<String> allowPower = sysConfig.getAllowInPowerSave();
+        for (int i=0; i<allowPower.size(); i++) {
+             String pkg = allowPower.valueAt(i);
+            try {
+                ApplicationInfo ai = pm.getApplicationInfo(pkg,
+                         PackageManager.MATCH_SYSTEM_ONLY);
+                int appid = UserHandle.getAppId(ai.uid);
+                // These apps are on both the whitelist-except-idle as well
+                // as the full whitelist, so they apply in all cases.
+                mPowerSaveWhitelistAppsExceptIdle.put(ai.packageName, appid);
+                mPowerSaveWhitelistSystemAppIdsExceptIdle.put(appid, true);
+                mPowerSaveWhitelistApps.put(ai.packageName, appid);
+                mPowerSaveWhitelistSystemAppIds.put(appid, true);
+            } catch (PackageManager.NameNotFoundException e) {
+            }
+        }
+
+        //Constants为deviceIdleController中的内部类，继承ContentObserver
+        //监控数据库变化，同时得到Doze模式定义的一些时间间隔
+        mConstants = new Constants(mHandler, getContext().getContentResolver());
+
+        //解析deviceidle.xml，并将其中定义的package对应的app，加入到mPowerSaveWhitelistUserApps中
+        readConfigFileLocked();
+
+        //将白名单的内容给AlarmManagerService和PowerMangerService
+        //例如：DeviceIdleController判断开启Doze模式时，会通知PMS
+        //此时除去白名单对应的应用外，PMS会将其它所有的WakeLock设置为Disable状态
+        updateWhitelistAppIdsLocked();
+
+        //以下的初始化，都是假设目前处在进入Doze模式相反的条件上
+        mNetworkConnected = true;
+        mScreenOn = true;
+        // 先假设正在充电，如果不是则在电量变化时可以获取到真实的状态
+        mCharging = true;
+
+        //Doze模式定义终端初始时为ACTIVE状态
+        mState = STATE_ACTIVE;
+        //屏幕状态初始时为ACTIVE状态
+        mLightState = LIGHT_STATE_ACTIVE;
+        mInactiveTimeout = mConstants.INACTIVE_TIMEOUT;
+    }
+
+    //发布服务
+    //BinderService和LocalService均为DeviceIdleController的内部类
+    mBinderService = new BinderService();
+    publishBinderService(Context.DEVICE_IDLE_CONTROLLER, mBinderService);
+    publishLocalService(LocalService.class, new LocalService());
+}
+```
+###onBootPhase   
+
+

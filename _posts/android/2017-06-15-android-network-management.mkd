@@ -1,0 +1,234 @@
+---
+layout: post
+title:  "Android Network Management (1) ConnectivityService" 
+date:   2017-06-15
+categories: [Android]
+---
+在开机过程中 systemserver 中会有如下 4 个service 启动， 这4个系统服务管理和统计Android network     
+
+* ConnectivityService ， 提供数据连接管理服务    
+* NetworkPolicyManagerService , 提供网络策略管理服务     
+* NetworkManagementService , 提供对物理网络接口的管理服务      
+* NetworkStatsService , 提供网络传输数据统计服务      
+
+其中只有 ConnectivityService 和 NetworkPolicyManagerService 对上层 app 提供 SDK 接口， 其他服务通过 INetworkManagementService 和 INetworkStatsService 接口来访问这两个服务。   
+
+###ConnectivityService   
+
+Android 提供了很多的网络链接通道 ，而 ConnectivityService 用于管理网络连接的状态与信息，通过该系统服务，我们可以查询当前可用的网络信息，发起网络链接请求，设置网络属性与参数等。以下列出部分常用网络类型:   
+
+```java
+public static final int TYPE_WIFI        = 1;
+public static final int TYPE_MOBILE_MMS  = 2;	//Multimedia Messaging Service,表示网络可以通过MMSC发送MMS（彩信）
+public static final int TYPE_MOBILE_SUPL = 3;	//Secure User Plane Location,网络可以使用基站进行辅助GPS定位
+public static final int TYPE_MOBILE_DUN  = 4;	//Dial-Up Network,网络支持拨号的方式接入
+public static final int TYPE_BLUETOOTH   = 7;
+......
+```
+
+上层 app 可以通过 Context.getSystemService(Context.CONNECTIVITY_SERVICE) 获取到 ConnectivityManager ， ConnectivityManager 相当于 ConnectivityService 的包装 ， 实际功能都是在 ConnectivityService 中。    
+
+以下为 android developer 中对于 ConnectivityManager 主要功能的描述 :   
+  
+1. Monitor network connections (Wi-Fi, GPRS, UMTS, etc.)    
+2. Send broadcast intents when network connectivity changes    
+3. Attempt to "fail over" to another network when connectivity to a network is lost    
+4. Provide an API that allows applications to query the coarse-grained or fine-grained state of the available networks    
+5. Provide an API that allows applications to request and select networks for their data traffic     
+
+####ConnectivityManager常用接口   
+ConnectivityManager提供了很多接口用于获取系统当前的网络连接信息：    
+
+* getAllNetworkInfo(): 返回所有网络信息     
+* getActiveNetworkInfo():获取当前激活的网络连接信息    
+* getNetworkForType: 获取指定类型的网络    
+* requestNetwork(...) : 监听网络可用（WIFI或者移动数据）的变化    
+* setAirplaneMode(): 开启飞行模式    
+* addDefaultNetworkActiveListener() : 监听默认网络连接是否激活   
+* registerNetworkCallback() : 监听某个网络请求的状态，可用时进行回调
+
+####ConnectivityService初始化
+SystemServer 中会创建 ConnectivityService , 并将service 注册到 ServiceManager      
+
+```java
+	connectivity = new ConnectivityService(
+			context, networkManagement, networkStats, networkPolicy);
+	ServiceManager.addService(Context.CONNECTIVITY_SERVICE, connectivity);
+	networkStats.bindConnectivityManager(connectivity);
+	networkPolicy.bindConnectivityManager(connectivity);
+```
+ConnectivityService初始化时主要做了以下几个事情：
+
+* 创建默认的移动数据请求     
+* 初始化消息队列     
+* 网络热点状态监听     
+
+先从一个问题来看 ConnectivityService , 当当前的网络连接变为不可用时，系统如何自动切换其他可用的网络连接的 , 下面以 wifi 断开自动切换到移动数据为例:    
+WifiStateMachine 每次连接状态变化时会调用 setNetworkDetailedState() 方法更新状态    
+
+```java
+setNetworkDetailedState(DetailedState.DISCONNECTED);
+
+    private boolean setNetworkDetailedState(NetworkInfo.DetailedState state) {
+        if (mNetworkInfo.getExtraInfo() != null && mWifiInfo.getSSID() != null
+                && !mWifiInfo.getSSID().equals(WifiSsid.NONE)) {
+            if (!mNetworkInfo.getExtraInfo().equals(mWifiInfo.getSSID())) {
+                //更新 NetworkInfo 中的 SSID
+                mNetworkInfo.setExtraInfo(mWifiInfo.getSSID());
+                sendNetworkStateChangeBroadcast(null);
+            }
+        }
+
+        if (state != mNetworkInfo.getDetailedState()) {
+            mNetworkInfo.setDetailedState(state, null, mWifiInfo.getSSID());
+            if (mNetworkAgent != null) {
+                //将最新状态发送到NetworkAgent
+                mNetworkAgent.sendNetworkInfo(mNetworkInfo);
+            }
+            sendNetworkStateChangeBroadcast(null);
+            return true;
+        }
+        return false;
+    }
+```
+
+这里需要了解一下 NetworkAgent ， 以下为 NetworkAgent 的官方描述    
+> A Utility class for handling for communicating between bearer-specific code and ConnectivityService.    
+这句话描述了NetworkAgent的作用： 他是某个网络连接与ConnectivityService之间的通讯的工具     
+
+```java
+//NetworkAgent 是一个Handler的子类，并且他是一个抽象类（abstract）
+public abstract class NetworkAgent extends Handler {}
+
+        public NetworkAgent(Looper looper, Context context, String logTag, NetworkInfo ni, NetworkCapabilities nc, LinkProperties lp, int score, NetworkMisc misc) {
+            super(looper);
+            mContext = context;
+            if (ni == null || nc == null || lp == null) {
+                throw new IllegalArgumentException();
+            }
+            //获取ConnectivityManager对象，并向其注册自己 , 最终调用的是 ConnectivityService 的 registerNetworkAgent() 方法
+            ConnectivityManager cm = (ConnectivityManager)mContext.getSystemService( Context.CONNECTIVITY_SERVICE);
+            cm.registerNetworkAgent(new Messenger(this), new NetworkInfo(ni), new LinkProperties(lp), new NetworkCapabilities(nc), score, misc);
+        }
+``` 
+
+来看 ConnectivityService 中的 registerNetworkAgent()   
+
+```java
+@ConnectivityService.java 
+public void registerNetworkAgent(Messenger messenger, NetworkInfo networkInfo, LinkProperties linkProperties, NetworkCapabilities networkCapabilities, int currentScore, NetworkMisc networkMisc) {  
+    //权限检查  
+    enforceConnectivityInternalPermission();  
+    //创建NetworkAgentInfo对象  
+    NetworkAgentInfo nai = new NetworkAgentInfo(messenger, new AsyncChannel(),  
+            new NetworkInfo(networkInfo), new LinkProperties(linkProperties),  
+            new NetworkCapabilities(networkCapabilities), currentScore, mContext, mTrackerHandler,  
+            new NetworkMisc(networkMisc));  
+    synchronized (this) {  
+        nai.networkMonitor.systemReady = mSystemReady;  
+    }  
+    //向自己Handler发送EVENT_REGISTER_NETWORK_AGENT消息  
+    mHandler.sendMessage(mHandler.obtainMessage(EVENT_REGISTER_NETWORK_AGENT, nai));  
+}  
+```
+mHandler 对 EVENT_REGISTER_NETWORK_AGENT 的处理是 handleRegisterNetworkAgent  
+
+```java
+    private void handleRegisterNetworkAgent(NetworkAgentInfo na) {
+        //将 na 放入 mNetworkAgentInfos 中
+        mNetworkAgentInfos.put(na.messenger, na);
+        synchronized (mNetworkForNetId) {
+            mNetworkForNetId.put(na.network.netId, na);
+        }
+        //向NetworkAgentInfo的asyncChannel对象发起连接请求 , 后续连接的消息由 mTrackerHandler 来处理 
+        na.asyncChannel.connect(mContext, mTrackerHandler, na.messenger);
+        NetworkInfo networkInfo = na.networkInfo;
+        na.networkInfo = null;
+        updateNetworkInfo(na, networkInfo);
+    }
+```
+
+这里可以看到将刚才创建的 NetworkAgentInfo 加入到了 mNetworkAgentInfos 中， 后面还会和获取到的 NetworkAgent 对象创建AsyncChannel双向通道， 后面也就是通过该通道来通信。 
+
+回头在看一下 WifiStateMachine 中 NetworkAgent 的创建 ， 可以看到是在 wifi 连接建立之后创建好：    
+
+```java
+@WifiStateMachine.java
+    class L2ConnectedState extends State {
+        @Override
+        public void enter() {
+            mNetworkAgent = new WifiNetworkAgent(getHandler().getLooper(), mContext,
+                    "WifiNetworkAgent", mNetworkInfo, mNetworkCapabilitiesFilter,
+                    mLinkProperties, 60, mNetworkMisc); 
+```
+
+在来继续看wifi 断开时的流程  setNetworkDetailedState(DetailedState.DISCONNECTED)  ->   mNetworkAgent.sendNetworkInfo(mNetworkInfo)     
+
+```java
+@NetworkAgent.java 
+public void sendNetworkInfo(NetworkInfo networkInfo) {  
+    queueOrSendMessage(EVENT_NETWORK_INFO_CHANGED, new NetworkInfo(networkInfo));  
+}
+```
+
+```java
+@ConnectivityService.java  
+    private class NetworkStateTrackerHandler extends Handler {
+
+        @Override
+        public void handleMessage(Message msg) {
+            if (!maybeHandleAsyncChannelMessage(msg) &&
+                    !maybeHandleNetworkMonitorMessage(msg) &&
+                    !maybeHandleNetworkAgentInfoMessage(msg)) {
+                maybeHandleNetworkAgentMessage(msg);
+            }
+        }
+
+        private void maybeHandleNetworkAgentMessage(Message msg) {
+	   //从 mNetworkAgentInfos 中找到对应的 NetworkAgentInfo 
+            NetworkAgentInfo nai = mNetworkAgentInfos.get(msg.replyTo);
+                case NetworkAgent.EVENT_NETWORK_INFO_CHANGED: {
+                    NetworkInfo info = (NetworkInfo) msg.obj;
+                    //通过updateNetworkInfo来进行更新  
+                    updateNetworkInfo(nai, info);
+                    break;
+                }
+    }
+```
+
+```java
+private void updateNetworkInfo(NetworkAgentInfo networkAgent, NetworkInfo newInfo) {  
+    NetworkInfo.State state = newInfo.getState();  
+    NetworkInfo oldInfo = null;  
+    synchronized (networkAgent) {  
+        oldInfo = networkAgent.networkInfo;  
+        //将最新的networkInfo更新到ConnectivityService  
+        networkAgent.networkInfo = newInfo;  
+    }  
+  
+  
+    if (state == NetworkInfo.State.CONNECTED && !networkAgent.created) {  
+    } else if (state == NetworkInfo.State.DISCONNECTED || state == NetworkInfo.State.SUSPENDED) {  
+        //断开WIFI的NetworkAgent中的AsyncChannel  
+        networkAgent.asyncChannel.disconnect();  
+    }  
+}
+```   
+
+在updateNetworkInfo()中，ConnectivityService将最新的NetworkInfo保存在networkAgent中，等待其他应用来获取。然后就向NetworkAgent的AsyncChannel发起disconnect()的请求，该请求将会在ConnectivityService中收到CMD_CHANNEL_DISCONNECTED的回应     
+
+```java
+    private class NetworkStateTrackerHandler extends Handler {
+        private boolean maybeHandleAsyncChannelMessage(Message msg) {
+                case AsyncChannel.CMD_CHANNEL_DISCONNECTED: {
+                    handleAsyncChannelDisconnected(msg);
+                    break;
+                }
+```
+
+
+
+
+
+
+

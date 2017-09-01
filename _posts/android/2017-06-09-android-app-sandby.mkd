@@ -1,0 +1,78 @@
+---
+layout: post
+title:  "Android APP Standby"
+date:   2017-06-09
+categories: [Android]
+---
+
+在 Android M 的 MTBF 测试中有一项检查 wifi 连接的测试 , 检测方法是获取 NetworkInfor 中的 State .  这一项测试会出现一个问题： 偶发测试一段时间后 wifi 确实有连上的情况下测试 fail , 打开 debug log 会发现后台测试 service 在获取 NeteorkInfor 的时候 ：     
+
+> V NetworkPolicy: updateRulesForNonMeteredNetworksLocked(10127), isIdle: true , mRestrictPower: false, mDeviceIdleMode: false, isForeground=false, isWhitelisted=false, oldRule=0 (NONE), newRule=64 (REJECT_ALL), newUidRules=64 (REJECT_ALL), oldUidRules=0 (NONE)     
+
+可以看到这里并没有进到 device idle , 而会有一个 isIdle: true 。    
+继续往上追code ,  发现调用的是   mUsageStats.isAppIdle(packageName, uid, userId)      
+
+```java
+        public boolean isAppIdle(String packageName, int uidForAppId, int userId) {
+            return UsageStatsService.this.isAppIdleFiltered(packageName, uidForAppId, userId,
+                    SystemClock.elapsedRealtime());
+        }
+```
+
+```java
+    private boolean isAppIdleFiltered(String packageName, int appId, int userId,
+            long elapsedRealtime) {
+        if (packageName == null) return false;
+        // mAppIdleEnabled 获取的是 config_enableAutoPowerModes 字段， 目前的code 中为 true
+        if (!mAppIdleEnabled) {
+            return false;
+        }
+        if (appId < Process.FIRST_APPLICATION_UID) {
+            // System uids 永远不会进入 idle
+            return false;
+        }
+        if (packageName.equals("android")) {
+            // Nor does the framework (which should be redundant with the above, but for MR1 we will
+            // retain this for safety).
+            return false;
+        }
+        if (mSystemServicesReady) {
+            try {
+                //白名单内的APP 不会进入 idle 
+                if (mDeviceIdleController.isPowerSaveWhitelistExceptIdleApp(packageName)) {
+                    return false;
+                }
+            } catch (RemoteException re) {
+                throw re.rethrowFromSystemServer();
+            }
+
+            //是否是 DeviceAdmin ， 一般锁屏相关应用会用到
+            if (isActiveDeviceAdmin(packageName, userId)) {
+                return false;
+            }
+
+            //Network 评分的应用， 还没看过这样的APP , 看code 中需要在Settings 中添加确定
+            if (isActiveNetworkScorer(packageName)) {
+                return false;
+            }
+
+            // Widget 应用
+            if (mAppWidgetManager != null
+                    && mAppWidgetManager.isBoundWidgetPackage(packageName, userId)) {
+                return false;
+            }
+        }
+
+        if (!isAppIdleUnfiltered(packageName, userId, elapsedRealtime)) {
+            return false;
+        }
+
+        // Check this last, as it is the most expensive check
+        // TODO: Optimize this by fetching the carrier privileged apps ahead of time
+        if (isCarrierApp(packageName)) {
+            return false;
+        }
+
+        return true;
+    }
+```

@@ -1,0 +1,113 @@
+---
+layout: post
+title:  "Android Alarm in Doze mode"
+date:   2017-05-31
+categories: [Android]
+---
+
+## Whitelist in Alarm Service
+DeviceIdleController 中会有两处设置 Alarm 的白名单:   
+   
+```java
+mLocalAlarmManager = getLocalService(AlarmManagerService.LocalService.class);
+
+    public void onBootPhase(int phase) {
+        if (phase == PHASE_SYSTEM_SERVICES_READY) {
+                mLocalAlarmManager.setDeviceIdleUserWhitelist(mPowerSaveWhitelistUserAppIdArray);
+
+    private void updateWhitelistAppIdsLocked() {
+            mLocalAlarmManager.setDeviceIdleUserWhitelist(mPowerSaveWhitelistUserAppIdArray);
+```
+
+最终就是设置到 AlarmManagerService 的 mDeviceUserWhiteList中：   
+
+```java
+    int[] mDeviceIdleUserWhitelist = new int[0];
+
+    void setDeviceIdleUserWhitelistImpl(int[] appids) {
+        synchronized (mLock) {
+            mDeviceIdleUserWhitelist = appids;
+        }
+    }
+```
+
+再来看会用到 mDeviceIdleUserWhitelist 的地方, 只有 AlarmManagerService 的 set 方法内会用到, 如果是系统程序 UID 或者白名单程序则将 flag 中 FLAG_ALLOW_WHILE_IDLE_UNRESTRICTED 置起来。
+
+```java
+        public void set(String callingPackage,
+                int type, long triggerAtTime, long windowLength, long interval, int flags,
+                PendingIntent operation, IAlarmListener directReceiver, String listenerTag,
+                WorkSource workSource, AlarmManager.AlarmClockInfo alarmClock) {
+            ......
+            } else if (workSource == null && (callingUid < Process.FIRST_APPLICATION_UID
+                    || Arrays.binarySearch(mDeviceIdleUserWhitelist,
+                            UserHandle.getAppId(callingUid)) >= 0)) {
+                flags |= AlarmManager.FLAG_ALLOW_WHILE_IDLE_UNRESTRICTED;
+                flags &= ~AlarmManager.FLAG_ALLOW_WHILE_IDLE;
+            }
+``` 
+
+## Alarm Doze 激活
+在调用 AlarmManager 的 setIdleUntil 时会激活 Alarm Doze 开启 ， 在 DeviceIdleController 中 deep idle 都会通过调用 setIdleUntil 来切换状态   
+
+```java
+    /**
+     * Schedule an idle-until alarm, which will keep the alarm manager idle until the given time.
+     * @hide
+     */
+    public void setIdleUntil(int type, long triggerAtMillis, String tag, OnAlarmListener listener,
+            Handler targetHandler) {
+        setImpl(type, triggerAtMillis, WINDOW_EXACT, 0, FLAG_IDLE_UNTIL, null,
+                listener, tag, targetHandler, null, null);
+    }
+
+    private void setImpl(int type, long triggerAtMillis, long windowMillis, long intervalMillis,
+            int flags, PendingIntent operation, final OnAlarmListener listener, String listenerTag,
+            Handler targetHandler, WorkSource workSource, AlarmClockInfo alarmClock) {
+            ......
+            mService.set(mPackageName, type, triggerAtMillis, windowMillis, intervalMillis, flags,
+                    operation, recipientWrapper, listenerTag, workSource, alarmClock);
+```
+
+调用到 AlarmManagerService 的 set 方法， 这里会对 falg 有很多的处理   
+
+```java
+        public void set(String callingPackage,
+                int type, long triggerAtTime, long windowLength, long interval, int flags,
+                PendingIntent operation, IAlarmListener directReceiver, String listenerTag,
+                WorkSource workSource, AlarmManager.AlarmClockInfo alarmClock) {
+            final int callingUid = Binder.getCallingUid();
+
+            ......
+
+            //先清除 FLAG_WAKE_FROM_IDLE 和 FLAG_ALLOW_WHILE_IDLE_UNRESTRICTED
+            flags &= ~(AlarmManager.FLAG_WAKE_FROM_IDLE
+                    | AlarmManager.FLAG_ALLOW_WHILE_IDLE_UNRESTRICTED);
+
+            // this is used to tell the alarm manager when to come out of idle mode
+            // which is only for DeviceIdleController.
+            if (callingUid != Process.SYSTEM_UID) {
+                flags &= ~AlarmManager.FLAG_IDLE_UNTIL;
+            }
+
+            // If this is an exact time alarm, then it can't be batched with other alarms.
+            if (windowLength == AlarmManager.WINDOW_EXACT) {
+                flags |= AlarmManager.FLAG_STANDALONE;
+            }
+
+            // If this alarm is for an alarm clock, then it must be standalone and we will
+            if (alarmClock != null) {
+                flags |= AlarmManager.FLAG_WAKE_FROM_IDLE | AlarmManager.FLAG_STANDALONE;
+
+            // 如果是系统程序 或者 白名单内的应用 则将 FLAG_ALLOW_WHILE_IDLE_UNRESTRICTED 置起
+            } else if (workSource == null && (callingUid < Process.FIRST_APPLICATION_UID
+                    || Arrays.binarySearch(mDeviceIdleUserWhitelist,
+                            UserHandle.getAppId(callingUid)) >= 0)) {
+                flags |= AlarmManager.FLAG_ALLOW_WHILE_IDLE_UNRESTRICTED;
+                flags &= ~AlarmManager.FLAG_ALLOW_WHILE_IDLE;
+            }
+
+            setImpl(type, triggerAtTime, windowLength, interval, operation, directReceiver,
+                    listenerTag, flags, workSource, alarmClock, callingUid, callingPackage);
+        }
+```

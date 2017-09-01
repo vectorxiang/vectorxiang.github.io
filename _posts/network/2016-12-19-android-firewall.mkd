@@ -1,6 +1,6 @@
 ---
 layout: post
-title:  "Android Firewall debug 记录"
+title:  "Android Firewall 相关 debug 记录"
 date:   2016-12-19
 categories: [network]
 ---

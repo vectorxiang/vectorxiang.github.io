@@ -1,0 +1,200 @@
+---
+layout: post
+title:  "Android 省电模式"
+date:   2017-03-21
+categories: [Android]
+---
+
+#流程分析
+UI入口为 : Settings -> Battery -> Battery saver, 通过一个 switch 控件来控制开关   
+          
+./packages/apps/Settings/src/com/android/settings/fuelgauge/BatterySaverSettings.java    
+   
+```java
+    public void onSwitchChanged(Switch switchView, boolean isChecked) {
+        mHandler.removeCallbacks(mStartMode);
+        if (isChecked) {
+            //private static final long WAIT_FOR_SWITCH_ANIM = 500;
+            mHandler.postDelayed(mStartMode, WAIT_FOR_SWITCH_ANIM);
+        } else {
+            if (DEBUG) Log.d(TAG, "Stopping low power mode from settings");
+            trySetPowerSaveMode(false);
+        }
+    }
+```
+
+其中 postdelayed 的声明如下:
+
+```java
+public final boolean postDelayed (Runnable r, long delayMillis) 
+```
+其中参数Runnable r在Handler对象所运行的线程中执行。
+所以这里会开一个新线程 mStartMode ：
+
+```java
+    private final Runnable mStartMode = new Runnable() {
+        @Override
+        public void run() {
+            AsyncTask.execute(new Runnable() {
+                @Override
+                public void run() {
+                    if (DEBUG) Log.d(TAG, "Starting low power mode from settings");
+                    trySetPowerSaveMode(true);
+                }
+            });
+        }
+    };
+
+    private void trySetPowerSaveMode(boolean mode) {
+        if (!mPowerManager.setPowerSaveMode(mode)) {
+            if (DEBUG) Log.d(TAG, "Setting mode failed, fallback to current value");
+            //创建一个线程来设置switch控件
+            mHandler.post(mUpdateSwitch);
+        }
+        // TODO: Remove once broadcast is in place.
+        ConditionManager.get(getContext()).getCondition(BatterySaverCondition.class).refreshState();
+    }
+
+//其中 mPowerManager 为获取的系统电源管理powermanagerservice 的代理类
+mPowerManager = (PowerManager) mContext.getSystemService(Context.POWER_SERVICE);
+```
+
+./frameworks/base/core/java/android/os/PowerManager.java
+
+```java
+    public boolean setPowerSaveMode(boolean mode) {
+        try {
+            //final IPowerManager mService 
+            return mService.setPowerSaveMode(mode);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+```
+
+./frameworks/base/services/core/java/com/android/server/power/PowerManagerService.java     
+
+```java
+        public boolean setPowerSaveMode(boolean mode) {
+               ......
+                return setLowPowerModeInternal(mode);
+
+=>
+    private boolean setLowPowerModeInternal(boolean mode) {
+        synchronized (mLock) {
+            //充电时不允许开启省电模式
+            if (mIsPowered) {
+                return false;
+            }
+            Settings.Global.putInt(mContext.getContentResolver(),
+                    Settings.Global.LOW_POWER_MODE, mode ? 1 : 0);
+            mLowPowerModeSetting = mode;
+
+            if (mAutoLowPowerModeConfigured && mBatteryLevelLow) {
+                if (mode && mAutoLowPowerModeSnoozing) {
+                    mAutoLowPowerModeSnoozing = false;
+                } else if (!mode && !mAutoLowPowerModeSnoozing) {
+                    mAutoLowPowerModeSnoozing = true;
+                }
+            }
+
+            updateLowPowerModeLocked();
+            return true;
+        }
+    }
+
+=>
+    private void updateLowPowerModeLocked() {
+        if ((mIsPowered || !mBatteryLevelLow && !mBootCompleted) && mLowPowerModeSetting) {
+            // 当设备正在(充电或者非低电量且非boot completed 阶段）且已经开启省电模式， 关闭省电模式
+            Settings.Global.putInt(mContext.getContentResolver(),
+                    Settings.Global.LOW_POWER_MODE, 0);
+            mLowPowerModeSetting = false;
+        }
+        //一下变量分别为 当前没有充电，自动开启省电模式，电量低于省电模式的电量触发点时user没有关闭省电模式，电池电量低
+        final boolean autoLowPowerModeEnabled = !mIsPowered && mAutoLowPowerModeConfigured
+                && !mAutoLowPowerModeSnoozing && mBatteryLevelLow;
+        final boolean lowPowerModeEnabled = mLowPowerModeSetting || autoLowPowerModeEnabled;
+
+        if (mLowPowerModeEnabled != lowPowerModeEnabled) {
+            mLowPowerModeEnabled = lowPowerModeEnabled;
+            //qcom平台上会调用 device/qcom/common/power 内的 POWER_HARDWARE_MODULE_ID module，其中并不会处理 POWER_HINT_LOW_POWER
+            powerHintInternal(POWER_HINT_LOW_POWER, lowPowerModeEnabled ? 1 : 0);           
+            postAfterBootCompleted(new Runnable() {
+                @Override
+                public void run() {
+                    // 发送 ACTION_POWER_SAVE_MODE_CHANGING 的broadcast 
+                    Intent intent = new Intent(PowerManager.ACTION_POWER_SAVE_MODE_CHANGING)
+                            .putExtra(PowerManager.EXTRA_POWER_SAVE_MODE, mLowPowerModeEnabled)
+                            .addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY);	//只有动态注册的receiver才能接收到
+                    mContext.sendBroadcast(intent);
+                    ArrayList<PowerManagerInternal.LowPowerModeListener> listeners;
+                    synchronized (mLock) {
+                        listeners = new ArrayList<PowerManagerInternal.LowPowerModeListener>(
+                                mLowPowerModeListeners);
+                    }
+                    for (int i=0; i<listeners.size(); i++) {
+                        listeners.get(i).onLowPowerModeChanged(lowPowerModeEnabled);
+                    }
+                    intent = new Intent(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED);
+                    intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY);
+                    mContext.sendBroadcast(intent);
+                    // Send internal version that requires signature permission.
+                    mContext.sendBroadcastAsUser(new Intent(
+                            PowerManager.ACTION_POWER_SAVE_MODE_CHANGED_INTERNAL), UserHandle.ALL,
+                            Manifest.permission.DEVICE_POWER);
+                }
+            });
+        }
+    }
+```
+可以看到这里主要是启动了一个线程， 该线程中主要做了3个事情：    
+1.发送 ACTION_POWER_SAVE_MODE_CHANGING broadcast
+2.调用其他地方注册的 onLowPowerModeChanged      
+3.发送 ACTION_POWER_SAVE_MODE_CHANGED_INTERNAL broadcast    
+
+###ACTION_POWER_SAVE_MODE_CHANGING     
+1./packages/apps/Settings/src/com/android/settings/fuelgauge/BatterySaverSettings.java     
+
+```java
+            if (action.equals(ACTION_POWER_SAVE_MODE_CHANGING)) {
+                mHandler.post(mUpdateSwitch);	//更新Settings 中省电模式switch控件状态
+            } 
+```    
+
+2. /frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/policy/BatteryControllerImpl.java    
+
+```java
+        } else if (action.equals(PowerManager.ACTION_POWER_SAVE_MODE_CHANGING)) {
+            setPowerSave(intent.getBooleanExtra(PowerManager.EXTRA_POWER_SAVE_MODE, false));
+        }
+=>
+        firePowerSaveChanged();
+
+    private void firePowerSaveChanged() {
+        synchronized (mChangeCallbacks) {
+            final int N = mChangeCallbacks.size();
+            for (int i = 0; i < N; i++) {
+                mChangeCallbacks.get(i).onPowerSaveChanged(mPowerSave);	//调用onPowerSaveChanged， 主要用于更新UI, 如电池颜色等
+            }
+        }
+    }
+```
+###onLowPowerModeChanged
+1. /frameworks/base/services/core/java/com/android/server/VibratorService.java      
+   在systemReady 中register LowPowerModeObserver, 主要作用是取消震动效果    
+2./frameworks/base/services/core/java/com/android/server/wm/WindowManagerService.java    
+   取消动画效果
+3./frameworks/base/services/core/java/com/android/server/net/NetworkPolicyManagerService.java    
+
+```java
+                        public void onLowPowerModeChanged(boolean enabled) {
+                            if (LOGD) Slog.d(TAG, "onLowPowerModeChanged(" + enabled + ")");
+                            synchronized (mUidRulesFirstLock) {
+                                if (mRestrictPower != enabled) {
+                                    mRestrictPower = enabled;
+                                    updateRulesForRestrictPowerUL();
+                                }
+                            }
+                        }
+```
