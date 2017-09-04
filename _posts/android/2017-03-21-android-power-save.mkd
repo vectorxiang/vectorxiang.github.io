@@ -3,9 +3,10 @@ layout: post
 title:  "Android 省电模式"
 date:   2017-03-21
 categories: [Android]
+catalog:    true
 ---
 
-#流程分析
+# 流程分析
 UI入口为 : Settings -> Battery -> Battery saver, 通过一个 switch 控件来控制开关   
           
 ./packages/apps/Settings/src/com/android/settings/fuelgauge/BatterySaverSettings.java    
@@ -153,7 +154,7 @@ mPowerManager = (PowerManager) mContext.getSystemService(Context.POWER_SERVICE);
 2.调用其他地方注册的 onLowPowerModeChanged      
 3.发送 ACTION_POWER_SAVE_MODE_CHANGED_INTERNAL broadcast    
 
-###ACTION_POWER_SAVE_MODE_CHANGING     
+### ACTION_POWER_SAVE_MODE_CHANGING     
 1./packages/apps/Settings/src/com/android/settings/fuelgauge/BatterySaverSettings.java     
 
 ```java
@@ -180,7 +181,7 @@ mPowerManager = (PowerManager) mContext.getSystemService(Context.POWER_SERVICE);
         }
     }
 ```
-###onLowPowerModeChanged
+### onLowPowerModeChanged
 1. /frameworks/base/services/core/java/com/android/server/VibratorService.java      
    在systemReady 中register LowPowerModeObserver, 主要作用是取消震动效果    
 2./frameworks/base/services/core/java/com/android/server/wm/WindowManagerService.java    

@@ -2,6 +2,7 @@
 layout: post
 title:  "Android Network Management (1) ConnectivityService" 
 date:   2017-06-15
+catalog:    true
 categories: [Android]
 ---
 在开机过程中 systemserver 中会有如下 4 个service 启动， 这4个系统服务管理和统计Android network     
@@ -13,7 +14,7 @@ categories: [Android]
 
 其中只有 ConnectivityService 和 NetworkPolicyManagerService 对上层 app 提供 SDK 接口， 其他服务通过 INetworkManagementService 和 INetworkStatsService 接口来访问这两个服务。   
 
-###ConnectivityService   
+### ConnectivityService   
 
 Android 提供了很多的网络链接通道 ，而 ConnectivityService 用于管理网络连接的状态与信息，通过该系统服务，我们可以查询当前可用的网络信息，发起网络链接请求，设置网络属性与参数等。以下列出部分常用网络类型:   
 
@@ -47,7 +48,7 @@ ConnectivityManager提供了很多接口用于获取系统当前的网络连接�
 * addDefaultNetworkActiveListener() : 监听默认网络连接是否激活   
 * registerNetworkCallback() : 监听某个网络请求的状态，可用时进行回调
 
-####ConnectivityService初始化
+#### ConnectivityService初始化
 SystemServer 中会创建 ConnectivityService , 并将service 注册到 ServiceManager      
 
 ```java

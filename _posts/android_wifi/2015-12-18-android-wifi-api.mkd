@@ -6,10 +6,9 @@ category: android wifi
 tags: [network, android , wifi]
 mathjax: 
 chart:
+catalog:    true
 comments: false
 ---
-packet   **<font size=5>android.net.wifi<font>**   
-
 ## 相关授权:                    
 使用wifi    
 
@@ -25,7 +24,7 @@ packet   **<font size=5>android.net.wifi<font>**
 
 >\<uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" /\>                        
 
-##android.net.wifi 中常用的类有：    
+## android.net.wifi 中常用的类有：    
       
 1. ScanResult, 主要用来描述已经检测出的接入点，包括接入点的地址、接入点的名称、身份认证、频率、信号强度等。
 

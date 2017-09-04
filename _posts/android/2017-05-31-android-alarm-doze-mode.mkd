@@ -3,6 +3,7 @@ layout: post
 title:  "Android Alarm in Doze mode"
 date:   2017-05-31
 categories: [Android]
+catalog:    true
 ---
 
 ## Whitelist in Alarm Service

@@ -3,6 +3,7 @@ layout: post
 title:  "Android Doze mode"
 date:   2017-04-14
 categories: [Android]
+catalog:    true
 ---
 大部分内容来自于 [http://blog.csdn.net/gaugamela/article/details/52981984](http://blog.csdn.net/gaugamela/article/details/52981984)
 
@@ -17,7 +18,7 @@ DeviceIdleController 作为一个系统级服务在开机时由 SystemServer 初
 ```
 开机过程中依次调用到 DeviceIdleController 的 构造函数 -> onStart -> onBootPhase    
 
-###构造函数
+### 构造函数
 ```java
     public DeviceIdleController(Context context) {
         super(context);
@@ -27,7 +28,7 @@ DeviceIdleController 作为一个系统级服务在开机时由 SystemServer 初
     }
 ```
 
-###onStart
+### onStart
 ```java
 public void onStart() {
     final PackageManager pm = getContext().getPackageManager();
@@ -104,6 +105,6 @@ public void onStart() {
     publishLocalService(LocalService.class, new LocalService());
 }
 ```
-###onBootPhase   
+### onBootPhase   
 
 

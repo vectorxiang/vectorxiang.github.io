@@ -3,6 +3,7 @@ layout: post
 title:  "smd"
 date:   2015-10-27
 categories: [android]
+catalog:    true
 ---
 >在Qualcomm的处理器中会包含多个subsystem，这些subsytem会由个别子处理器来运行。这些子处理器之间的通讯的主要方式就是共享内存(share memery)。
 
