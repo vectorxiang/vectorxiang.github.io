@@ -3,6 +3,9 @@ layout: post
 title:  "Bluetooth Overview"
 date:   2015-10-27
 categories: [bluetooth]
+header-img: "img/home-bg.jpg"
+tags:
+    - Bluetooth
 ---
 
 #RADIO SPECIFICATION
