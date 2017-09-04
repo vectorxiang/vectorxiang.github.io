@@ -78,7 +78,8 @@ packet   **<font size=5>android.net.wifi<font>**
 19. updateNetwork.
 
 ###应用
-```java
+   
+```c
 WifiManager wifiManager = (WifiManager) getSystemService(Context.WIFI_SERVICE);
 mWifiInfo = mWifiManager.getConnectionInfo();
 
@@ -112,5 +113,8 @@ mWifiInfo.getIpAddress();
 ......
 ```
 
+```python
+print 'Hello, World!'
+```
 
 
