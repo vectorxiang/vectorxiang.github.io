@@ -10,7 +10,7 @@ comments: false
 ---
 packet   **<font size=5>android.net.wifi<font>**   
 
-###相关授权:                    
+## 相关授权:                    
 使用wifi    
 
 >\<uses-feature android:name="android.hardware.wifi" /\>     
@@ -25,7 +25,7 @@ packet   **<font size=5>android.net.wifi<font>**
 
 >\<uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" /\>                        
 
-###android.net.wifi 中常用的类有：    
+##android.net.wifi 中常用的类有：    
       
 1. ScanResult, 主要用来描述已经检测出的接入点，包括接入点的地址、接入点的名称、身份认证、频率、信号强度等。
 
@@ -37,7 +37,7 @@ packet   **<font size=5>android.net.wifi<font>**
 
 5. WifiManager.WifiLock, 通过WifiLock来锁定wifi网络，使其一直保持连接，直到这个锁定被释放。如果app需要下载很大的文件，就需要保持wifi锁，来确保app有足够的时间下载完成。wifi锁不能超越wifi-enabled设置，也没有飞行模式。    
 
-###WifiManager的常用方法
+## WifiManager的常用方法
 
 1. addNetwork
 
@@ -77,7 +77,7 @@ packet   **<font size=5>android.net.wifi<font>**
 
 19. updateNetwork.
 
-###应用
+## 应用
    
 ```c
 WifiManager wifiManager = (WifiManager) getSystemService(Context.WIFI_SERVICE);
@@ -111,10 +111,6 @@ mWifiInfo.getBSSID();
 mWifiInfo.getIpAddress();
 
 ......
-```
-
-```python
-print 'Hello, World!'
 ```
 
 
