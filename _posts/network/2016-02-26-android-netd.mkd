@@ -4,7 +4,7 @@ title:  "深入理解Android 笔记之 Netd"
 date:   2016-02-26
 categories: [network]
 ---
-#1.简介
+# 1.简介
 Netd 就是Network Daemon 的缩写，表示Network守护进程，其功能主要包括:     
 
 * 设置防火墙、网络地址转换(NAT)、带宽控制、无线网卡软接入点(Soft Access Point)控制,共享上网(Tether)等。    
@@ -16,7 +16,7 @@ Netd: /system/netd/*
 lib: /system/core/libsyutils/src/*   
 Framework: /frameworks/base/services/core/java/com/android/server/NetworkManagementService.java   
 
-#2.代码
+# 2.代码
 Netd 进程由 init 进程根据 init.rc 的对应配置项启动:  
   
 ```c
