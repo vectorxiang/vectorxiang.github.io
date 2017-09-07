@@ -29,6 +29,24 @@ struct net_device {
 	struct net_device_stats 	stats;	//包含接口的 tx/rx 统计信息
 	const struct net_device_ops 	*netdev_ops;	//包含该接口的各种操作函数指针
 	.......
+}
+
+struct net_device_ops {
+	......
+	int			(*ndo_open)(struct net_device *dev);
+	int			(*ndo_stop)(struct net_device *dev);
+	netdev_tx_t		(*ndo_start_xmit) (struct sk_buff *skb,
+						   struct net_device *dev);
+	void			(*ndo_change_rx_flags)(struct net_device *dev,
+						       int flags);
+	int			(*ndo_set_mac_address)(struct net_device *dev,
+						       void *addr);
+	int			(*ndo_do_ioctl)(struct net_device *dev,
+					        struct ifreq *ifr, int cmd);
+	void			(*ndo_set_rx_mode)(struct net_device *dev);
+	struct net_device_stats* (*ndo_get_stats)(struct net_device *dev);
+	......
+}		
 ```
 在网络设备驱动中需要先创建一个 net_device ， 常用的函数有    
 
@@ -57,8 +75,9 @@ struct net_device* alloc_etherdev(int sizeof_priv)
 在分配好 net_device 结构体之后需要将该结构体注册到内核中  
 
 ```c
-int register_netdevice(struct net_device *dev)
+int register_netdev(struct net_device *dev)
+void unregister_netdev(struct net_device *dev)
 ```
-
+当设备注册好之后 ， 如果有数据要通过该设备发送则会直接调用 netdev_ops 中的 ndo_start_xmit ， 而设备收到数据会通过 netif_rx 将数据交给上层   
 	
 
