@@ -1,0 +1,41 @@
+---
+layout: post
+title:  "wifi architectrue 简介"
+date:   2017-09-07
+catalog:	true
+categories: [android wifi]
+---
+Android 的 wifi 结构主要可以分为两个部分
+1. 数据包的收发 
+2. 无线网络的控制
+
+![](/images/network/wifi_architectrue.png) 
+
+### 数据传输
+在 Linux 中网络通信都是通过 socket 来操作 ， 其中会经过
+
+
+
+``` flow
+
+st=>start: Start|past:>http://www.baidu.com
+e=>end:  Ende|future:>http://www.baidu.com
+op1=>operation:  My Operation
+op2=>operation:  Stuff|current
+sub1=>subroutine:  My Subroutine|invalid
+cond=>condition:  Yes or No|approved:>http://www.google.com
+c2=>condition:  Good idea|rejected
+io=>inputoutput:  catch something...|future
+st->op1(right)->cond
+cond(yes, right)->c2
+cond(no)->sub1(left)->op1
+c2(yes)->io->e
+c2(no)->op2->e 
+
+```
+| Tables        | Are           | Cool  |
+| ------------- |:-------------:| -----:|
+| col 3 is      | right-aligned | $1600 |
+| col 2 is      | centered      |   $12 |
+| zebra stripes | are neat      |    $1 |
+
