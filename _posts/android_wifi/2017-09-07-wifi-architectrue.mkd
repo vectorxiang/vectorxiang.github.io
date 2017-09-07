@@ -12,51 +12,53 @@ Android 的 wifi 结构主要可以分为两个部分
 ![](/images/network/wifi_architectrue.png) 
 
 ### 数据传输
-在 Linux 中网络通信都是通过 socket 来操作 ， 其中会经过
+在 Linux 中网络通信都是通过 socket 来操作 ， 其中会经过    
 
+	系统调用  <=>  协议无关层 <=> 网络协议 <=> 设备无关层 <=> 设备驱动     
+	
+从设备无关层是怎样到设备的驱动呢， 这里就涉及到网络设备的注册了。   
 
+在linux中使用struct net_device结构体来描述每一个网络设备 ， 以下仅列出部分常用的成员变量     
 
-``` flow
-
-st=>start: Start|past:>http://www.baidu.com
-e=>end:  Ende|future:>http://www.baidu.com
-op1=>operation:  My Operation
-op2=>operation:  Stuff|current
-sub1=>subroutine:  My Subroutine|invalid
-cond=>condition:  Yes or No|approved:>http://www.google.com
-c2=>condition:  Good idea|rejected
-io=>inputoutput:  catch something...|future
-st->op1(right)->cond
-cond(yes, right)->c2
-cond(no)->sub1(left)->op1
-c2(yes)->io->e
-c2(no)->op2->e 
-
+```c
+struct net_device {
+	char			name[IFNAMSIZ];	//设备名
+	int			ifindex;	//标识网络设备的唯一索引号
+	unsigned char		*dev_addr;	//设备MAC地址
+	unsigned int 	flags;	//网络设备接口的标识符
+	struct net_device_stats 	stats;	//包含接口的 tx/rx 统计信息
+	const struct net_device_ops 	*netdev_ops;	//包含该接口的各种操作函数指针
+	.......
 ```
-table{
-    border-collapse: collapse;
-    border-spacing: 0;
-    border:2px solid #ff0000;
-}
+在网络设备驱动中需要先创建一个 net_device ， 常用的函数有    
 
-<table border="1">
-<tr>
-<th>Heading</th>
-<th>Another Heading</th>
-</tr>
-<tr>
-<td>row 1, cell 1</td>
-<td>row 1, cell 2</td>
-</tr>
-<tr>
-<td>row 2, cell 1</td>
-<td>row 2, cell 2</td>
-</tr>
-</table>
+```c
+/*  sizeof_priv 是私有数据区大小；
+     name 是格式化设备名,
+     setup 是初始化函数，注册该设备时，该函数被调用。
+     txqs 是 tx subqueues 的数目
+     rxqs 是 rx subqueues 的数目  */
+struct net_device *alloc_netdev_mqs(int sizeof_priv, const char *name,
+		unsigned char name_assign_type,
+		void (*setup)(struct net_device *),
+		unsigned int txqs, unsigned int rxqs)     
+     
+#define alloc_netdev(sizeof_priv, name, name_assign_type, setup) \
+	alloc_netdev_mqs(sizeof_priv, name, name_assign_type, setup, 1, 1)
 
-| Tables        | Are           | Cool  |
-| ------------- |:-------------:| -----:|
-| col 3 is      | right-aligned | $1600 |
-| col 2 is      | centered      |   $12 |
-| zebra stripes | are neat      |    $1 |
+#define alloc_netdev_mq(sizeof_priv, name, name_assign_type, setup, count) \
+	alloc_netdev_mqs(sizeof_priv, name, name_assign_type, setup, count, \
+			 count)
+
+/* alloc_netdev_mqs 的封装 ， 以太网设备的名称设为eth%d，
+   默认初始化函数设为ether_setup，发送和接收队列数目都设为1  */
+struct net_device* alloc_etherdev(int sizeof_priv)
+```
+在分配好 net_device 结构体之后需要将该结构体注册到内核中  
+
+```c
+int register_netdevice(struct net_device *dev)
+```
+
+	
 
