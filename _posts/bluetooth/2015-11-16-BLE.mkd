@@ -2,35 +2,41 @@
 layout: post
 title:  "BLE介绍"
 date:   2015-11-16
+catalog:	true
 categories: [bluetooth]
 ---
-##1. 物理层
+## 1. 物理层
 BLE(bluetooth low energy)同样运行在2.4G ISM 频段。总共分为40个频段如下图：
 ![](/images/bluetooth/ble_channel.png)    
 
-和 Basic Rate 一样 BLE 使用 GFSK 调制，最大传输速率为 1Mbps .
-##2. 链路层
-###2.1 链路状态机
+和 Basic Rate 一样 BLE 使用 GFSK 调制，最大传输速率为 1Mbps .   
+
+## 2. 链路层
+
+### 2.1 链路状态机
 链路层操作可以描述为链路状态机(The Link Layer State Machine)   
 链路状态机有如下五种状态    
 - Standby State:		准备,不传输或接受数据包    
-- Advertising State:	广播, advertiser,发送advertising channel packets,接受来自scanner的响应    
+- Advertising State:	广播, advertiser发送advertising channel packets,接受来自scanner的响应    
 - Scanning State:		监听/扫描, scanner,监听来自advertiser的advertising channel packets    
 - Initiating State:	初始化, initiator, 监听来自特殊设备的advertising channel packets,并进行初始化连接    
 - Connection State:	连接, 有两种角色: Master Role(从initiator进入)/Slave Role(从advertiser进入)     
 ![](/images/bluetooth/ble_state.png)    
 链路层可以有多个链路状态机，但至少有一个支持Advertising/Scanning State
-###2.2 比特序
+
+### 2.2 比特序
 Packet/Protocol DATA Unit 在链路层的比特顺序为小端序,LSB 会首先被发送
-###2.3 物理信道
+
+### 2.3 物理信道
 如上所述，BLE在2.4G 分为40个 RF channel，这些信道分为两种： advertising 和 data 
 
-- advertising信道: 使用3个RF信道用来发现设备，初始化连接和广播数据             
+- advertising信道: 使用3个RF信道用来发现设备，初始化连接和广播数据
 - data信道:        则使用多达37个RF信道用于两个连接设备间通信  
 ![](/images/bluetooth/ble_channel_index.png)   
  
-##3. BLE Packet
-###3.1 数据包格式
+## 3. BLE Packet
+
+### 3.1 数据包格式
 对于BLE链路层，advertising/data channel packet格式如下    
 ![](/images/bluetooth/ble_packet_format.png)    
 PDU可以最大承载257byte ，在BT4.0 这个值最大为39     
@@ -43,7 +49,8 @@ PDU可以最大承载257byte ，在BT4.0 这个值最大为39
  * data channel packet        - 每个链路层连接都有其唯一值，由initiator随机生成，相关限制可参看规范      
 - PDU: 协议数据单元，对于advertising和data channel packet，有各自的格式要求    
 - CRC: 由PDU计算得到   
-###3.2  Advertising Channel PDU
+
+### 3.2  Advertising Channel PDU
 PDU格式如下    
 ![](/images/bluetooth/ble_advertising_pdu.png)     
 Header格式如下   
@@ -55,7 +62,7 @@ Header格式如下
 * Length: 定义Payload的字节数(octets)，有效范围是6~37Bytes 
 * Payload: 由PDU类型决定
 
-####3.2.1 Advertising PDUS
+#### 3.2.1 Advertising PDUS
 Advertising PDUS包含下面几种类型
          
 - ADV_IND: 表明自己是可以被连接的    
@@ -77,7 +84,7 @@ Advertising PDUS包含下面几种类型
 
 这些PUDs的数据流向为 advertiser->scanner/initiator  
  
-####3.2.2 Scanning PDUS
+#### 3.2.2 Scanning PDUS
 Scanning PDUS包含下面几种类型
 
 - SCAN_REQ: 数据流向为 scanner->advertiser    
@@ -89,7 +96,7 @@ Scanning PDUS包含下面几种类型
     Payload ： AdvA(6 octets) + ScanRspData(0~31 octets)    
         AdvA字段为advertiser的地址(TxAdd=0表示公共地址, Txadd=1表示随机地址)     
 
-####3.2.3 Initiating PDUS
+#### 3.2.3 Initiating PDUS
 Initiating PDUS包含下面的类型   
 
 - CONNECT_REQ: 数据流向为 initiator->advertiser      
@@ -97,14 +104,14 @@ Initiating PDUS包含下面的类型
         InitA字段为scanner的地址(TxAdd=0表示公共地址, Txadd=1表示随机地址)    
         AdvA字段为advertiser的地址(RxAdd=0表示公共地址, Rxadd=1表示随机地址)  
 
-###3.3 Data Channel PDU
+### 3.3 Data Channel PDU
 PDU格式如下图   
 ![](/images/bluetooth/ble_data_pdu.png)   
 Header格式如下    
 ![](/images/bluetooth/ble_data_pdu_header.png)    
 ![](/images/bluetooth/ble_data_pdu_header_format.png)
 
-####3.3.1 Payload
+#### 3.3.1 Payload
 Payload格式由LLID字段决定，有下面两种类型：   
 - LL Data PDU: 用来发送L2CAP数据, LLID为01b/10b     
 - LL Control PDU: 用来控制链路层连接, 详细信息请参考规范           
@@ -112,7 +119,7 @@ Payload格式由LLID字段决定，有下面两种类型：
 ![](/images/bluetooth/ble_data_pdu_control1.png)   
 ![](/images/bluetooth/ble_data_pdu_control2.png)    
 
-###4. Bit Stream Processing
+### 4. Bit Stream Processing
 ![](/images/bluetooth/ble_bit_stream.png)    
 其中data whitening 是为了避免一长串的0或1 ，例如000000b 或 111111b这种数据。
 

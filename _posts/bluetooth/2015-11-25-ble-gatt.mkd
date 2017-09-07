@@ -2,9 +2,10 @@
 layout: post
 title:  "BLE 之 GATT 介绍"
 date:   2015-11-25
+catalog:	true
 categories: [bluetooth]
 ---
-#1. 介绍 
+# 1. 介绍 
 GATT(Generic Attribute Profile)，描述了一种使用ATT的服务框架 , 该框架定义了服务(Server)和服务属性(characteristic)的过程(Procedure)及格式 , Procedure定义了characteristic的发现、读、写、通知(Notifing)、指示(Indicating)及配置characteristic的广播 .
 
 GATT可以被Application或其他Profile使用 , 其协议栈如下图            
@@ -26,15 +27,16 @@ GATT对下层的需求如下：
                   对于BR/EDR, Encryption是强制的 
 - TX order      : GATT中的多字节字段，采用Least Significant octet先发送(Little Endian)
 
-#2. ATTRIBUTE PROTOCOL
-##2.1 GATT PROFILE HIERARCHY
+# 2. ATTRIBUTE PROTOCOL   
+
+## 2.1 GATT PROFILE HIERARCHY
 GATT指定了数据交互的结构(Structure) ， 这个结构体定义了一些基本元素，如Service、Characteristic ，这些元素存在于Attribute中              
 ![](/images/bluetooth/ble_gatt_hierarchy.png)                        
 GATT中最上层是Profile，Profile由一个或多个服务(Service)组成                   
 服务是由Characteristics组成，或是其他服务的引用(Reference)                 
 Characteristic包含一个值(Value)，可能包含该Value的相关信息      
 
-###Service
+### Service
 Service是[数据]和与之关联的[完成某个特定功能的行为]/[特性]的集合
             
 在GATT中，**一个服务由服务定义(Service Defintion)来实现**             
@@ -49,23 +51,24 @@ Server有两类
 
 判读一个服务是Primary or Secondary Service可通过高层协议强制规定    
 
-###Included Service
+### Included Service
 一个Included Service是一种引用已存在服务的方法，             
 具体办法为在服务定义的开始加上Included Service的引用，          
 这样整个Included Service定义成为新服务定义的一部分                
 
-###Characteristic
+### Characteristic
 Characteristic由Characteristic Definition定义，                   
 包含一个Characteristic声明、Characteristic属性、值、值的描述(Optional)                  
 
-##2.2 Configured Broadcast
+## 2.2 Configured Broadcast
 对于 LE 物理链路 ，在 Server 广播模式过程中 ，Client 可以使用 configured broadcast 来通知 Server 哪一种 characteristic value 应该被添加到 adversting data 广播出来 
 
 方法是设置 configured broadcast 相应的 bit
 广播频率则是 Server 、 Characteristic 行为定义的一部分 
 
-#3. Service Interoperability Requirement
-##3.1 Service Definition
+# 3. Service Interoperability Requirement   
+
+## 3.1 Service Definition
 服务定义(Service Definition)包含一个服务申明(Service Declaration) ，另外可能包含 Include Definitions 和 Characteristic Definitions 
 
  
