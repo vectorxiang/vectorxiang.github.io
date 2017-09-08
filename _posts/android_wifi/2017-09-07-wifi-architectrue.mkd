@@ -20,6 +20,7 @@ Android 的 wifi 结构主要可以分为两个部分
 
 在linux中使用struct net_device结构体来描述每一个网络设备 ， 以下仅列出部分常用的成员变量     
 
+
 ```c
 struct net_device {
 	char			name[IFNAMSIZ];	//设备名
@@ -33,6 +34,7 @@ struct net_device {
 
 struct net_device_ops {
 	......
+	/* 网络设备被激活时被调用（即设备状态由down变成up） */
 	int			(*ndo_open)(struct net_device *dev);
 	int			(*ndo_stop)(struct net_device *dev);
 	netdev_tx_t		(*ndo_start_xmit) (struct sk_buff *skb,
@@ -78,6 +80,12 @@ struct net_device* alloc_etherdev(int sizeof_priv)
 int register_netdev(struct net_device *dev)
 void unregister_netdev(struct net_device *dev)
 ```
-当设备注册好之后 ， 如果有数据要通过该设备发送则会直接调用 netdev_ops 中的 ndo_start_xmit ， 而设备收到数据会通过 netif_rx 将数据交给上层   
+当设备注册好之后 ， 如果有数据要通过该设备发送则会直接调用 netdev_ops 中的 ndo_start_xmit ， 而设备收到数据会通过 netif_rx 将数据交给设备无关层来处理
 	
+### 无线网络控制 
+为从用户空间控制无线驱动程序 ， 在 Linux 系统中提供了两套配置 802.11 的接口，分别是 wext ( Wireless Extensions 无线扩展接口) 和 nl80211 接口。  
+
+wext的接口实现上，应用层采用ioctl方式访问驱动，设置无线参数或者获取无线参数，配置无线驱动进行联网操作。无线驱动事件到应用层的传递采用的netlink socket技术 。但在linux-2.6.25 之后，wext API接口版本停止在V22就不再进行更新了。而替代其的是nl80211接口。    
+
+nl80211接口逐渐替代wext接口，nl80211用于配置一个cfg80211设备, 其应用层和内核层数据交换完全采用 netlink 的方式。目前使用 nl80211 接口的工具包括： iw、crda、hostapd 和 wpa_supplicant 等。  
 

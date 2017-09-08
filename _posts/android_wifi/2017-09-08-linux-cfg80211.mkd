@@ -1,0 +1,47 @@
+---
+layout: post
+title: "cfg80211"
+category: android wifi
+tags: [network, android , wifi, linux]
+catalog: true
+---
+## 1. 简介
+Linux 平台目前常用针对无线网络设备的API有两套 wext (Wireless Extensions) 和 nl80211 & cfg80211 ,  其主要区别是 wext 通过 ioctl 的方式来控制无线网卡驱动， 后者使用 netlink .
+
+这里主要介绍 nl80211 和 cfg80211 , 其中 ， cfg80211用于驱动开发， 而 nl80211 API供用户空间进程使用以操作那些利用cfg80211 API开发的无线网卡驱动。 使用 nl80211 的 tool 包括 : iw , crda , hostapd , wpa_supplicant(with **-Dnl80211**)   
+
+![](/images/network/cfg80211_architectrue.png ) 
+
+## 2. nl80211 
+简单来说， nl80211的核心就是通过 netlink 机制向 Kernel 中的无线网卡驱动发送特定的消息 , 只不过这些消息的类型、 参数等都由nl80211.h 定义 。 例如在 wpa_supplicant 中通过 nl80211 发送 scan command :   
+
+```c
+@ wpa_supplicant/src/drivers/driver_nl80211_scan.c
+int wpa_driver_nl80211_scan(struct i802_bss *bss,
+			    struct wpa_driver_scan_params *params)
+{
+	......
+	msg = nl80211_scan_common(bss, NL80211_CMD_TRIGGER_SCAN, params);
+}
+```
+其中会通过 netlink 发送 **NL80211_CMD_TRIGGER_SCAN** command ， 这个command 的定义就是在 nl80211.h 中
+
+```c
+@ wpa_supplicant/src/drivers/nl80211_copy.h
+enum nl80211_commands {
+	NL80211_CMD_UNSPEC		//unspecified command to catch errors
+	NL80211_CMD_GET_WIPHY	//request information about a wiphy or dump request to get a list of all present wiphys.
+	......
+	NL80211_CMD_GET_SCAN	//get scan results
+	NL80211_CMD_TRIGGER_SCAN	//trigger a new scan with the given parameters
+	......
+}
+```
+
+鉴于netlink的复杂性， 开源世界提供了几个较为完备的基于netlink编程的框架， 其中最著名的就是libnl。 在 Android 中移植了精简了libnl 和libnl-genl 的项目代码 external/libnl    
+
+![](/images/network/libnl.png ) 
+
+
+ 
+
