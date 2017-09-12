@@ -1,0 +1,46 @@
+---
+layout: post
+title: "netlink"
+category: network
+tags: [network , wifi, linux]
+catalog: true
+---
+# 1. netlink 简介
+
+什么是Netlink？Netlink是linux提供的用于内核和用户态进程之间的通信方式。**但是注意虽然Netlink主要用于用户空间和内核空间的通信，但是也能用于用户空间的两个进程通信**。只是进程间通信有其他很多方式，一般不用Netlink。除非需要用到Netlink的广播特性时。   
+
+一般来说用户空间和内核空间的通信方式有三种：/proc、ioctl、Netlink。而前两种都是单向的，但是Netlink可以实现双工通信。  
+
+Netlink协议基于BSD socket和AF_NETLINK地址簇(address family)，使用32位的端口号寻址(以前称作PID)，每个Netlink协议(或称作总线，man手册中则称之为netlink family)，通常与一个或一组内核服务/组件相关联，如NETLINK_ROUTE用于获取和设置路由与链路信息、NETLINK_KOBJECT_UEVENT用于内核向用户空间的udev进程发送通知等。netlink具有以下特点:   
+
++  支持全双工、异步通信(当然同步也支持)
++  用户空间可使用标准的BSD socket接口(但netlink并没有屏蔽掉协议包的构造与解析过程，推荐使用libnl等第三方库)
++  在内核空间使用专用的内核API接口
++  支持多播(因此支持“总线”式通信，可实现消息订阅)
++ **在内核端可用于进程上下文与中断上下文**  
+
+# 2. 用户态数据结构
+
+netlink 和 UDP 比较类似都是面向数据报的无连接传输， 和 UDP 一样Netlink也支持 sendto 和 sendmsg , sendmsg 需要用户空间自己构造 msghdr 头， 而 sendto 会由系统调用 sys_sendto 来添加 msghdr .    
+
+先来看几个重要的数据结构的关系：  
+![](/images/network/netlink_data_struct.png)  
+
+## 2.1 struct msghdr
+msghdr这个结构在socket变成中就会用到，并不算Netlink专有的 ,  其中 msg_iov指定数据缓冲区数组，而msg_iovlen指明了该数组的元素个数。
+
+## 2.2 Struct sockaddr_nl
+Struct sockaddr_nl 为Netlink 的地址，和我们通常socket编程中的sockaddr_in作用一样 , 字段 nl_family 为 netlink 套接字地址类型，一般 nl_family 默认为 AF_NETLINK 。nl_pad 为填充字段，一般填充0 . 字段 nl_pid 为端口号。nl_groups 为多播地址掩码。     
+
+```c
+struct sockaddr_nl {
+	__kernel_sa_family_t	nl_family;	/* AF_NETLINK	*/
+	unsigned short	nl_pad;		/* zero		*/
+	__u32		nl_pid;		/* port ID	*/
+       	__u32		nl_groups;	/* multicast groups mask */
+};
+```
+(1) nl_pid：在Netlink规范里，PID全称是Port-ID(32bits)，其主要作用是用于唯一的标识一个基于netlink的socket通道。通常情况 nl_pid都设置为当前进程的进程号。然而，对于一个进程的多个线程同时使用netlink socket的情况，nl_pid的设置一般采用如下这个样子来实现：   
+	pthread_self() << 16 | getpid();
+
+
