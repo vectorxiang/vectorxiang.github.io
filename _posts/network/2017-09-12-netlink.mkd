@@ -5,7 +5,7 @@ category: network
 tags: [network , wifi, linux]
 catalog: true
 ---
-# 1. netlink 简介
+# 1. Netlink 简介
 
 什么是Netlink？Netlink是linux提供的用于内核和用户态进程之间的通信方式。**但是注意虽然Netlink主要用于用户空间和内核空间的通信，但是也能用于用户空间的两个进程通信**。只是进程间通信有其他很多方式，一般不用Netlink。除非需要用到Netlink的广播特性时。   
 
@@ -149,7 +149,7 @@ int main(int argc, char* argv[])
     return 0;
 }
 ```
-可以看到这里 socket 的 protocol 为自定自定义的 protocal ,  内核已经在 netlink.h 中定义了一些 protocol , 用户如需自定义只需避开这些 protocol 并保证用户端和 kernel 端都有相应的 socket 通信即可。   
+以上有3个设置端口号的位置， A处 bind socket 时为注册地址 ； B处将包含端口号的地址加入msghdr ， 代表收信人的地址， 0代表内核 ； C处为数据中包含的源地址， 通常情况和 A 一样。   
 
 ```c
 #define NETLINK_ROUTE        0    /* Routing/device hook                */
@@ -162,5 +162,164 @@ int main(int argc, char* argv[])
 #define NETLINK_SELINUX        7    /* SELinux event notifications */
 #define NETLINK_ISCSI        8    /* Open-iSCSI */
 #define NETLINK_AUDIT        9    /* auditing */
-#define NETLINK_FIB_LOOKUP    10 
 ```
+
+# 3. 内核Netlink
+
+## 3.1 创建netlink socket
+```c
+static inline struct sock *
+netlink_kernel_create(struct net *net, int unit, struct netlink_kernel_cfg *cfg)
+```
+(1) net：是一个网络名字空间namespace，在不同的名字空间里面可以有自己的转发信息库，有自己的一套net_device等等。**默认情况下都是使用 init_net这个全局变量**。
+(2) unit：表示netlink协议类型，如NETLINK_TEST、NETLINK_SELINUX。
+(3) cfg: 包含多播地址和消息接收函数等netlink 的相关参数 ， 3.6.0之前的版本这些参数直接是 netlink_kernel_create 的参数  
+
+```c
+struct netlink_kernel_cfg {
+	unsigned int	groups;		//多播地址
+	unsigned int	flags;
+	/* input 为内核模块定义的netlink消息处理函数，当有消 息到达这个netlink socket时，
+	该input函数指针就会被引用，且只有此函数返回时，调用者的sendmsg才能返回。 */
+	void		(*input)(struct sk_buff *skb);
+	struct mutex	*cb_mutex;		//访问数据时的互斥信号量
+	int		(*bind)(int group);
+	void		(*unbind)(int group);
+	bool		(*compare)(struct net *net, struct sock *sk);
+};
+```
+
+## 3.2 发送消息
+当内核中发送netlink消息时，也需要设置目标地址与源地址，而且内核中消息是通过struct sk_buff来管理的， linux/netlink.h中定义了一个宏用于获取sk_buff的控制块：
+
+```c
+#define NETLINK_CB(skb)         (*(struct netlink_skb_parms*)&((skb)->cb))
+
+//示例
+NETLINK_CB(skb).portid = 0;	//发送者pid
+NETLINK_CB(skb).dst_group = 1;	//目标组地址 
+```
+
+**发送单播消息netlink_unicast :**
+
+```c
+int netlink_unicast(struct sock *ssk, struct sk_buff *skb, u32 pid, int nonblock)
+```
+(1) ssk：为函数 netlink_kernel_create()返回的socket。
+(2) skb：存放消息，它的data字段指向要发送的netlink消息结构，而 skb的控制块保存了消息的地址信息，宏NETLINK_CB(skb)就用于方便设置该控制块。
+(3) pid：为接收此消息进程的pid，即目标地址，如果目标为组或内核，它设置为 0。
+(4) nonblock：表示该函数是否为非阻塞，如果为1，该函数将在没有接收缓存可利用时立即返回；而如果为0，该函数在没有接收缓存可利用定时睡眠。
+
+**发送广播消息netlink_broadcast :**
+最多允许设置32个多播组，每个多播组用1个比特表示，所以不同的多播组不可能出现重复。用户可以根据自己的实际需求，决定哪个多播组是用来做什么的。用户空间的进程如果对某个多播组感兴趣，那么它就加入到该组中，当内核空间的进程往该组发送多播消息时，所有已经加入到该多播组的用户进程都会收到该消息。
+
+```c
+int netlink_broadcast(struct sock *ssk, struct sk_buff *skb, u32 pid, u32 group, gfp_t allocation)
+```
+前面的三个参数与 netlink_unicast相同 .
+参数group为接收消息的多播组，该参数的每一个位代表一个多播组，因此如果发送给多个多播组，就把该参数设置为多个多播组组ID的位或.
+参数allocation为内核内存分配类型，一般地为GFP_ATOMIC或GFP_KERNEL，GFP_ATOMIC用于原子的上下文（即不可以睡眠），而GFP_KERNEL用于非原子上下文。
+
+## 3.3 释放netlink socket
+```c
+void netlink_kernel_release(struct sock *sk)
+```
+
+## 3.4 内核程序示例
+```c
+#include <linux/init.h>
+#include <linux/module.h>
+#include <linux/timer.h>
+#include <linux/time.h>
+#include <linux/types.h>
+#include <net/sock.h>
+#include <net/netlink.h>
+
+#define NETLINK_TEST 25
+#define MAX_MSGSIZE 1024
+
+int stringlength(char *s);
+int err;
+struct sock *nl_sk = NULL;
+
+//向用户态进程回发消息
+void sendnlmsg(char *message, int pid)
+{
+    struct sk_buff *skb_1;
+    struct nlmsghdr *nlh;
+    int len = NLMSG_SPACE(MAX_MSGSIZE);
+    int slen = 0;
+
+    printk(KERN_ERR "pid:%d\n",pid);
+    skb_1 = alloc_skb(len,GFP_KERNEL);
+
+    slen = stringlength(message);
+    nlh = nlmsg_put(skb_1,0,0,0,MAX_MSGSIZE,0);
+    NETLINK_CB(skb_1).portid = 0;
+    NETLINK_CB(skb_1).dst_group = 0;
+    message[slen]= '\0';
+    memcpy(NLMSG_DATA(nlh),message,slen+1);
+    
+    netlink_unicast(nl_sk,skb_1,pid,MSG_DONTWAIT);
+}
+int stringlength(char *s)
+{
+    int slen = 0;
+    for(; *s; s++)
+    {
+        slen++;
+    }
+    return slen;
+}
+
+//接收用户态发来的消息
+void nl_data_ready(struct sk_buff *__skb)
+ {
+     struct sk_buff *skb;
+     struct nlmsghdr *nlh;
+     char str[100];
+     struct completion cmpl;
+     int i=10;
+     int pid;
+     
+     skb = skb_get (__skb);
+     if(skb->len >= NLMSG_SPACE(0))
+     {
+         nlh = nlmsg_hdr(skb);
+         memcpy(str, NLMSG_DATA(nlh), sizeof(str));
+         printk("Message received:%s\n",str) ;
+         pid = nlh->nlmsg_pid;
+         while(i--)
+        {//我们使用completion做延时，每3秒钟向用户态回发一个消息
+            init_completion(&cmpl);
+            wait_for_completion_timeout(&cmpl,3 * HZ);
+            sendnlmsg("I am from kernel!",pid);
+        }
+         kfree_skb(skb);
+    }
+ }
+ 
+// Initialize netlink
+int netlink_init(void)
+{
+   struct netlink_kernel_cfg cfg = {
+      .groups = 1,
+      .input = nl_data_ready
+   };
+    nl_sk = netlink_kernel_create(&init_net, NETLINK_TEST, &cfg);
+    return 0;
+}
+
+static void netlink_exit(void)
+{
+    if(nl_sk != NULL){
+        sock_release(nl_sk->sk_socket);
+    }
+}
+module_init(netlink_init);
+module_exit(netlink_exit);
+MODULE_AUTHOR("yilong");
+MODULE_LICENSE("GPL");
+```
+值得注意的是 ： 因为在 nl_data_ready 中会每次延时3s 多次用户进程发送消息， 所以该函数不会立刻返回 ，这样造成用户态的 sendmsg 不会立刻返回， 等到 nl_data_ready return 才会返回， 所以用户程序会看到的现象是发送很久之后才一次性收到kernel 发回的数据。 
+**进程使用Netlink向内核发数据是同步，内核向进程发数据是异步** 

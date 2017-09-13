@@ -1,0 +1,10 @@
+---
+layout: post
+title: "generic netlink "
+category: network
+tags: [network , wifi, linux]
+catalog: true
+---
+
+由于netlink协议最多支持32个协议簇，到Linux4.1的内核中已经使用其中21个，对于用户需要定制特殊的协议类型略显不够 ，且对于用户自定义协议还需自行在include/linux/netlink.h中添加簇定义会比较麻烦， 为此Linux设计了这种通用Netlink协议簇，用户可在此之上定义更多类型的子协议。
+generic netlink支持1024(前10个保留不用)个子协议号，弥补了netlink协议类型较少的缺陷。
