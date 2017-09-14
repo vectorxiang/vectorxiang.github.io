@@ -29,7 +29,7 @@ netlink 和 UDP 比较类似都是面向数据报的无连接传输， 和 UDP �
 ## 2.1 struct msghdr
 msghdr这个结构在socket变成中就会用到，并不算Netlink专有的 ,  其中 msg_iov指定数据缓冲区数组，而msg_iovlen指明了该数组的元素个数。
 
-## 2.2 Struct sockaddr_nl
+## 2.2 struct sockaddr_nl
 Struct sockaddr_nl 为Netlink 的地址，和我们通常socket编程中的sockaddr_in作用一样 , 字段 nl_family 为 netlink 套接字地址类型，一般 nl_family 默认为 AF_NETLINK 。nl_pad 为填充字段，一般填充0 . 字段 nl_pid 为端口号。nl_groups 为多播地址掩码。     
 
 ```c
@@ -65,10 +65,9 @@ struct nlmsghdr
 | NLMSG_DONE | 当内核通过Netlink队列返回了多个消息，队列的最后一条消息的类型为NLMSG_DONE，其余消息的nlmsg_flags属性都被设置NLM_F_MULTI位有效      | 
 | NLMSG_OVERRUN | 暂时没用到      | 
 
-(3) nlmsg_flags：附加在消息上的额外说明信息，如上面提到的NLM_F_MULTI。
+(3) nlmsg_flags：附加在消息上的额外说明信息，如上面提到的NLM_F_MULTI。    
 (4) nlmsg_seq：消息序列号。因为Netlink是面向数据报的，所以存在丢失数据的风险，但是Netlink提供了如何确保消息不丢失的机制，让程序开发人员根据其实际需求而实现。消息序列号一般和NLM_F_ACK类型的消息联合使用，如果用户的应用程序需要保证其发送的每条消息都成功被内核收到的话，那么它发送消息时需要用户程序自己设置序号，内核收到该消息后对提取其中的序列号，然后在发送给用户程序回应消息里设置同样的序列号。有点类似于TCP的响应和确认机制。
 **当内核主动向用户空间发送广播消息时，消息中的该字段总是为0。**
-
 
 ## 2.4 用户空间示例
 
@@ -205,10 +204,10 @@ NETLINK_CB(skb).dst_group = 1;	//目标组地址
 ```c
 int netlink_unicast(struct sock *ssk, struct sk_buff *skb, u32 pid, int nonblock)
 ```
-(1) ssk：为函数 netlink_kernel_create()返回的socket。
-(2) skb：存放消息，它的data字段指向要发送的netlink消息结构，而 skb的控制块保存了消息的地址信息，宏NETLINK_CB(skb)就用于方便设置该控制块。
-(3) pid：为接收此消息进程的pid，即目标地址，如果目标为组或内核，它设置为 0。
-(4) nonblock：表示该函数是否为非阻塞，如果为1，该函数将在没有接收缓存可利用时立即返回；而如果为0，该函数在没有接收缓存可利用定时睡眠。
+(1) ssk：为函数 netlink_kernel_create()返回的socket。     
+(2) skb：存放消息，它的data字段指向要发送的netlink消息结构，而 skb的控制块保存了消息的地址信息，宏NETLINK_CB(skb)就用于方便设置该控制块。      
+(3) pid：为接收此消息进程的pid，即目标地址，如果目标为组或内核，它设置为 0。      
+(4) nonblock：表示该函数是否为非阻塞，如果为1，该函数将在没有接收缓存可利用时立即返回；而如果为0，该函数在没有接收缓存可利用定时睡眠。     
 
 **发送广播消息netlink_broadcast :**
 最多允许设置32个多播组，每个多播组用1个比特表示，所以不同的多播组不可能出现重复。用户可以根据自己的实际需求，决定哪个多播组是用来做什么的。用户空间的进程如果对某个多播组感兴趣，那么它就加入到该组中，当内核空间的进程往该组发送多播消息时，所有已经加入到该多播组的用户进程都会收到该消息。

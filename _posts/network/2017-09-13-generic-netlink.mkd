@@ -1,10 +1,124 @@
 ---
 layout: post
-title: "generic netlink "
+title: "generic netlink"
 category: network
 tags: [network , wifi, linux]
 catalog: true
 ---
+# 1. 简介
 
-由于netlink协议最多支持32个协议簇，到Linux4.1的内核中已经使用其中21个，对于用户需要定制特殊的协议类型略显不够 ，且对于用户自定义协议还需自行在include/linux/netlink.h中添加簇定义会比较麻烦， 为此Linux设计了这种通用Netlink协议簇，用户可在此之上定义更多类型的子协议。
+由于netlink协议最多支持32个协议簇，到Linux4.1的内核中已经使用其中21个，对于用户需要定制特殊的协议类型略显不够 ， 为此Linux设计了 generic netlink 通用Netlink协议簇，用户可在此之上定义更多类型的子协议。
 generic netlink支持1024(前10个保留不用)个子协议号，弥补了netlink协议类型较少的缺陷。
+
+generic netlink 的实现代码为: 
+kernel/net/netlink/genetlink.c 
+kernel/include/net/genetlink.h
+
+主要是注册 NETLINK_GENERIC 协议的 netlink ， 并构造其收发管理机制。 这里并不关注其具体实现细节， 让我们看一下在 kernel 和 userspace 中如何使用 generic netlink。
+
+# 2.  内核中使用genl
+
+## 2.1 genl family 注册
+```c
+static inline int
+_genl_register_family_with_ops_grps(struct genl_family *family,
+				    const struct genl_ops *ops, size_t n_ops,
+				    const struct genl_multicast_group *mcgrps,
+				    size_t n_mcgrps)
+
+#define genl_register_family_with_ops(family, ops)			\
+	_genl_register_family_with_ops_grps((family),			\
+					    (ops), ARRAY_SIZE(ops),	\
+					    NULL, 0)
+					    
+#define genl_register_family_with_ops_groups(family, ops, grps)	\
+	_genl_register_family_with_ops_grps((family),			\
+					    (ops), ARRAY_SIZE(ops),	\
+					    (grps), ARRAY_SIZE(grps))
+```
+下面分别来看 genl_family , genl_ops , genl_multicast_group 这三个结构体    
+
+### 2.1.1 genl_family
+```c
+struct genl_family {
+	unsigned int		id;
+	unsigned int		hdrsize;
+	char			name[GENL_NAMSIZ];
+	unsigned int		version;
+	unsigned int		maxattr;
+	bool			netnsok;
+	bool			parallel_ops;
+	int			(*pre_doit)(const struct genl_ops *ops,
+					    struct sk_buff *skb,
+					    struct genl_info *info);
+	void			(*post_doit)(const struct genl_ops *ops,
+					     struct sk_buff *skb,
+					     struct genl_info *info);
+	......
+};
+```
+
++ id : family的ID ，一般设置为 GENL_ID_GENERATE 即 0 会由 genl分配一个未占用的id 
++ hdrsize	: 自定义消息头的长度， 一般没有， 置为0
++ name: family name ，不同的family使用不同的名字 ， 当内核模块和用户空间采用同样的name，才可以建立通信
++ version : 协议版本号 
++ maxattr ： genl使用netlink标准的attr来传输数据。此字段定义了最大attr类型数。（注意：不是一次传输多少个attr，而是一共有多少种attr，因此，这个值可以被设为0，为0代表不区分所收到的数据的attr type）。在接收数据时，可以根据attr type，获得指定的attr type的数据在整体数据中的位置。
++ pre_doit : 在注册的operation被回调来处理消息之前被调用， 做需要做的处理， 不需要则置为NULL
++ post_doit : 在注册的operation被回调来处理消息之后被调用， 做需要做的处理， 不需要则置为NULL
+
+### 2.1.2 genl_ops 
+genl_ops 为 genl 的操作函数   
+
+```c
+struct genl_ops {
+	const struct nla_policy	*policy;
+	int		       (*doit)(struct sk_buff *skb,
+				       struct genl_info *info);
+	int		       (*dumpit)(struct sk_buff *skb,
+					 struct netlink_callback *cb);
+	int		       (*done)(struct netlink_callback *cb);
+	u8			cmd;
+	u8			internal_flags;
+	u8			flags;
+};
+```
++ cmd: 命令名。用于识别各genl_ops  
++ flag: 各种设置属性，以“或”连接。在需要admin特权级别时，使用GENL_ADMIN_PERM
++ policy：定义了attr规则。如果此指针非空，genl在触发事件处理程序之前，会使用这个字段来对帧中的attr做校验（nlmsg_parse函数）。该字段可以为空，表示在触发事件处理程序之前，不做校验。 
++ doit : 回调函数, 处理收到数据， 这里在看一下传进来的第二个参数 genl_info 指针， 内核在接收到用户的genetlink消息后，会对消息解析并封装成genl_info结构，便于命令回校函数进行处理    
+
+```c
+struct genl_info {
+	u32			snd_seq;
+	u32			snd_portid;
+	struct nlmsghdr *	nlhdr;
+	struct genlmsghdr *	genlhdr;
+	void *			userhdr;
+	struct nlattr **	attrs;
+#ifdef CONFIG_NET_NS
+	struct net *		_net;
+#endif
+	void *			user_ptr[2];
+	struct sock *		dst_sk;
+};
+```
+(1) snd_seq：消息的发送序号（不强制使用）；   
+(2) snd_portid：消息发送端socket所绑定的ID；   
+(3) nlhdr：netlink消息头；    
+(4) genlhdr：generic netlink消息头；   
+(5) userhdr：用户私有报头；   
+(6) attrs：netlink属性，包含了消息的实际载荷；   
+(7) dst_sk：目的socket；   
+
++ dumpit : 回调函数，当genl_ops的flag标志被添加了NLM_F_DUMP以后，每次收到genl消息即会回触发这个函数。 dumpit与doit的区别是:dumpit的第一个参数skb不会携带从客户端发来的数据。相反地，开发者应该在skb中填入需要传给客户端的数据， 然后，并skb的数据长度（可以用skb->len）return。skb中携带的数据会被自动送到客户端。只要dumpit的返回值大于 0，dumpit函数就会再次被调用，并被要求在skb中填入数据。当服务端没有数据要传给客户端时，dumpit要返回0。如果函数中出错，要求返回一 个负值。关于doit和dumpit的触发过程，可以查看源码中的genl_rcv_msg函数    
+
+### 2.1.3 genl_multicast_group
+```c
+struct genl_multicast_group {
+	char			name[GENL_NAMSIZ];	//组播组的 name 
+};
+```
+
+
+
+
