@@ -13,7 +13,10 @@ Linux 平台目前常用针对无线网络设备的API有两套 wext (Wireless E
 ![](/images/network/cfg80211_architectrue.png ) 
 
 ## 2. nl80211 
-简单来说， nl80211的核心就是通过 netlink 机制向 Kernel 中的无线网卡驱动发送特定的消息 , 只不过这些消息的类型、 参数等都由nl80211.h 定义 。 例如在 wpa_supplicant 中通过 nl80211 发送 scan command :   
+简单来说， nl80211的核心就是通过 netlink 机制向 Kernel 中的无线网卡驱动发送特定的消息。 只不过这些消息的类型、 参数等都由nl80211.h定义。   
+
+### 2.1 scan 举例
+以下通过 nl80211 触发driver 扫描为例 ：   
 
 ```c
 @ wpa_supplicant/src/drivers/driver_nl80211_scan.c
@@ -21,15 +24,47 @@ Linux 平台目前常用针对无线网络设备的API有两套 wext (Wireless E
 int wpa_driver_nl80211_scan(struct i802_bss *bss,
 			    struct wpa_driver_scan_params *params)
 {
+	struct nl_msg *msg = NULL;
 	......
+	// 创建nl80211消息， 其中NL80211_CMD_TRIGGER_SCAN是Nl80211定义的命令， 用于触发网络扫描
 	msg = nl80211_scan_common(bss, NL80211_CMD_TRIGGER_SCAN, params);
+	......
+	// 发送netlink消息
+	ret = send_and_recv_msgs(drv, msg, NULL, NULL);
+}
+
+static struct nl_msg *
+nl80211_scan_common(struct i802_bss *bss, u8 cmd,
+		    struct wpa_driver_scan_params *params)
+{
+	struct nl_msg *msg;
+	msg = nl80211_cmd_msg(bss, 0, cmd);
+		struct nl_msg * nl80211_cmd_msg(struct i802_bss *bss, int flags, uint8_t cmd)
+		{
+			struct nl_msg *msg;
+			// 分配 nl_msg
+			msg = nlmsg_alloc();
+			
+			// 内部调用 genlmsg_put 填充 netlink 首部和 genl 首部中的 目的genl family id , fag 和 cmd
+			if (!nl80211_cmd(bss->drv, msg, flags, cmd) ||
+			    // 内部调用 nla_put_u32 填充nlattr type 为NL80211_ATTR_IFINDEX 和 data
+			    nl80211_set_iface_id(msg, bss) < 0) {
+				nlmsg_free(msg);
+				return NULL;
+			}
+
+			return msg;
+		}	
+	...... // 其他消息处理
+	return msg;
 }
 ```
-其中会通过 netlink 发送 **NL80211_CMD_TRIGGER_SCAN** command ， 这个command 的定义就是在 nl80211.h 中
+由上面的例子可知， nl80211其实就是利用netlink机制将一些802.11相关的命令和参数发送给驱动去执行。 这些命令和参数信息可通过nl80211头文件查询 :   
 
 ```c
 @ wpa_supplicant/src/drivers/nl80211_copy.h
 
+// 支持的所有 cmd
 enum nl80211_commands {
 	NL80211_CMD_UNSPEC		//unspecified command to catch errors
 	NL80211_CMD_GET_WIPHY	//request information about a wiphy or dump request to get a list of all present wiphys.
@@ -37,12 +72,61 @@ enum nl80211_commands {
 	NL80211_CMD_GET_SCAN	//get scan results
 	NL80211_CMD_TRIGGER_SCAN	//trigger a new scan with the given parameters
 	......
+	__NL80211_CMD_AFTER_LAST,
+	NL80211_CMD_MAX = __NL80211_CMD_AFTER_LAST - 1
 }
+
+// 支持的所有 attributes
+enum nl80211_attrs {
+/* don't change the order or add anything between, this is ABI! */
+	NL80211_ATTR_UNSPEC,
+
+	NL80211_ATTR_WIPHY,
+	NL80211_ATTR_WIPHY_NAME,
+
+	NL80211_ATTR_IFINDEX,
+	NL80211_ATTR_IFNAME,
+	NL80211_ATTR_IFTYPE,
+	......
+	__NL80211_ATTR_AFTER_LAST,
+	NUM_NL80211_ATTR = __NL80211_ATTR_AFTER_LAST,
+	NL80211_ATTR_MAX = __NL80211_ATTR_AFTER_LAST - 1
+};	
 ```
 
-鉴于netlink的复杂性， 开源世界提供了几个较为完备的基于netlink编程的框架， 其中最著名的就是libnl。 在 Android 中移植了精简了libnl 和libnl-genl 的项目代码 external/libnl    
+### 2.2 libnl 简介
+鉴于netlink的复杂性， 开源世界提供了几个较为完备的基于netlink编程的框架， 其中最著名的就是[libnl](http://www.infradead.org/~tgr/libnl/)  :    
 
 ![](/images/network/libnl.png ) 
+· libnl-route： 用于和Kernel中的Routing子系统交互。   
+· libnl-nf： 用于和Kernel中的Netfilter子系统交互。    
+· libnl-genl： 用于和Kernel中的Generic Netlink模块交互。    
+
+ 在 Android 中移植了精简了libnl 和libnl-genl 的项目代码 external/libnl     
+ libnl 重新封装了netlink原有的API ,  其使用时必须分配一个nl_sock结构体 . 以下介绍部分会用到的 libnl API  :   
+ 
+```c
+ /* 分配和释放 nl_sock */
+struct nl_sock *nl_socket_alloc(void)
+void nl_socket_free(struct nl_sock *sk)
+
+// nl_connet内部将通过bind函数将netlink socket和protocol对应的模块进行绑定
+int nl_connect(struct nl_sock *sk, int protocol)
+
+// 为nl_sock对象设置一个回调函数， 当该socket上收到消息后， 就会回调此函数进行处理
+void nl_socket_set_cb(struct nl_sock *sk, struct nl_cb *cb);
+// 获取该nl_sock设置的回调函数信息
+struct nl_cb *nl_socket_get_cb(const struct nl_sock *sk);
+
+// 下面这两个函数计算netlink消息体中对应部分的长度
+int nlmsg_size(int payloadlen); 	// 请参考图来理解这两个函数返回值的意义
+int nlmsg_total_size(int payloadlen);
+```
+ ![](/images/network/genl_libnl_struct_len.PNG ) 
+ 
+```c
+
+```
 
 
  

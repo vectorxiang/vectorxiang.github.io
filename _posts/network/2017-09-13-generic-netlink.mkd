@@ -593,7 +593,7 @@ int main(int argc, char* argv[])
     return 0;
 }
 ```
-以上用户空间使用标准的socket API来接受/发送netlink消息， 必须自己处理netlink消息头以及generic netlink的family头， 工作较为繁琐， 开源世界已经提供了几个较为完备的基于netlink编程的框架， 其中最著名的就是 **libnl** ， 使用会简单很多。
+以上用户空间使用标准的socket API来接受/发送netlink消息， 必须自己处理netlink消息头以及generic netlink的family头， 工作较为繁琐， 开源世界已经提供了几个较为完备的基于netlink编程的框架， 其中最著名的就是 [libnl](http://www.infradead.org/~tgr/libnl/)  ， 使用会简单很多。
 
 
 
