@@ -84,7 +84,24 @@ struct genl_ops {
 ```
 + cmd: 命令名。用于识别各genl_ops  
 + flag: 各种设置属性，以“或”连接。在需要admin特权级别时，使用GENL_ADMIN_PERM
-+ policy：定义了attr规则。如果此指针非空，genl在触发事件处理程序之前，会使用这个字段来对帧中的attr做校验（nlmsg_parse函数）。该字段可以为空，表示在触发事件处理程序之前，不做校验。 
++ policy：定义了attr规则。如果此指针非空，genl在触发事件处理程序之前，会使用这个字段来对帧中的attr做校验（nlmsg_parse函数）。该字段可以为空，表示在触发事件处理程序之前，不做校验。 policy是一个struct nla_policy的数组 , 数组的个数要是定义的attr的数量+1， 假如有 attr A，则其对应的policy即为policys[A] 。    
+struct nla_policy结构体表示如下：   
+
+```c
+struct nla_policy 
+{ 
+   u16 type;
+   u16 len;
+};
+```
+**这里的type和attr中的type可不是一回事，attr中的type是用户自己定义的类型，只有用户自己能够理解。而这里的type是attr中的value中内容的类型**。可被配置为：   
+1) NLA_UNSPEC--未定义 ；   
+2) NLA_U8, NLA_U16, NLA_U32, NLA_U64为8bits, 16bits, 32bits, 64bits的无符号整型 ；   
+3) NLA_STRING--字符串 ；   
+4) NLA_NUL_STRING--空终止符字符串 ;    
+5) NLA_NESTED--attr流 ；   
+len字段的意思是：如果在type字段配置的是字符串有关的值，要把len设置为字符串的最大长度（不包含结尾的'\0'）。如果type字段未设置或被设置为NLA_UNSPEC，那么这里要设置为attr的payload部分的长度。  
+
 + doit : 回调函数, 处理收到数据， 这里在看一下传进来的第二个参数 genl_info 指针， 内核在接收到用户的genetlink消息后，会对消息解析并封装成genl_info结构，便于命令回校函数进行处理    
 
 ```c
@@ -119,6 +136,464 @@ struct genl_multicast_group {
 };
 ```
 
+## 2.2 genlmsg 
+先来看一下 genl 消息的结构 :  
+![](/images/network/genl_msg_architectrue.jpg ) 
+Generic Netlink消息头结构：struct genlmsghdr :   
+
+```c
+struct genlmsghdr {
+	__u8	cmd;	//genlmsg 消息类型
+	__u8	version;
+	__u16	reserved;
+};
+```
+再来看 genlmsg 的相关函数   
+内核中使用 struct sk_buff 来存放要发送的消息， generic netlink提供如下宏来分配sk_buff   
+
+```c
+struct sk_buff *genlmsg_new(size_t payload, gfp_t flags)  
+```
+payload ： 为分配内存的大小， 会自动在此基础上添加netlink 消息头和family头的大小   
+flags ： 为内核内存分配类型，一般地为GFP_ATOMIC(用于原子的上下文)或GFP_KERNEL(用于非原子上下文)   
+
+填充 nlmsghdr 和  genlmsghdr 中的相应参数：  
+
+```c
+// portid 为发送者id 
+void *genlmsg_put(struct sk_buff *skb, u32 portid, u32 seq,
+				struct genl_family *family, int flags, u8 cmd)
+```
+
+接下来需要给消息添加负载 ：   
+
+```c
+int nla_put(struct sk_buff *skb, int attrtype, int attrlen, const void *data);
+
+//另外还有很多封装的函数 
+static inline int nla_put_string(struct sk_buff *skb, int attrtype,
+				 const char *str);
+static inline int nla_put_s64(struct sk_buff *skb, int attrtype, s64 value);
+......
+```
+
+## 2.3 发送generic netlink消息 
+**发送单播消息**   
+
+```c
+static inline int genlmsg_reply(struct sk_buff *skb, struct genl_info *info)
+{
+	return genlmsg_unicast(genl_info_net(info), skb, info->snd_portid);
+}
+
+static inline int genlmsg_unicast(struct net *net, struct sk_buff *skb, u32 portid);
+```
+(1)  net ： network namespace， 网路命名空间， 是为了支持网络协议栈的多个实例(例如协议栈里面的全局数据就能够通过命名空间来区分) 以实现用户空间虚拟化   
+(2)  skb ： 要发送的数据   
+(3)  portid ： 指定接受者的 netlink port id   
+
+**发送组播消息**   
+
+```c
+static inline int genlmsg_multicast_netns(struct genl_family *family,
+					  struct net *net, struct sk_buff *skb,
+					  u32 portid, unsigned int group, gfp_t flags)
+{
+	if (WARN_ON_ONCE(group >= family->n_mcgrps))
+		return -EINVAL;
+	group = family->mcgrp_offset + group;
+	return nlmsg_multicast(net->genl_sock, skb, portid, group, flags);
+}
+
+static inline int genlmsg_multicast(struct genl_family *family,
+				    struct sk_buff *skb, u32 portid,
+				    unsigned int group, gfp_t flags)
+```
+
+
+## 2.4 genl family 注销
+```c
+int genl_unregister_family(struct genl_family *family);
+```
+
+## 2.5 示例
+### 2.5.1 内核注册generic fmily和operation代码
+```c
+#include <linux/module.h>
+#include <linux/timer.h>
+#include <linux/time.h>
+#include <linux/types.h>
+#include <net/sock.h>
+#include <net/genetlink.h>
+#define MAXLEN 256
+#define NLA_DATA(na) ((void *)((char *)(na) + NLA_HDRLEN))
+  /* attribute type */
+  enum {
+        EXMPL_A_UNSPEC,
+        EXMPL_A_MSG,	//仅仅使用EXMPL_A_MSG这一个消息
+        __EXMPL_A_MAX,
+  };
+#define EXMPL_A_MAX (__EXMPL_A_MAX - 1)
+  /* commands */
+  enum {
+        EXMPL_C_UNSPEC,
+        EXMPL_C_ECHO,	//只使用EXMPL_C_ECHO这一种命令
+        __EXMPL_C_ECHO,
+  };
+#define EXMPL_C_MAX (__EXMPL_C_MAX - 1)
+
+int stringlength(char *s);
+int genl_recv_doit(struct sk_buff *skb, struct genl_info *info);
+static inline int genl_msg_prepare_usr_msg(u8 cmd, size_t size, pid_t pid, struct sk_buff **skbp);
+static inline int genl_msg_mk_usr_msg(struct sk_buff *skb, int type, void *data, int len);
+int genl_msg_send_to_user(void *data, int len, pid_t pid);
+
+ static struct genl_family exmpl_gnl_family = {
+       .id = GENL_ID_GENERATE,	//自动分配id
+       .hdrsize = 0,		//不需要用户数据头部
+       .name = "myfamily",
+       .version = 1,
+       .maxattr = EXMPL_A_MAX,	////在我们的协议中可能用到的消息类型数
+  };
+  /* attribute policy */
+  static struct nla_policy exmpl_genl_policy[EXMPL_A_MAX + 1] = {
+        [EXMPL_A_MSG] = { .type = NLA_NUL_STRING },
+  };
+  /* operation definition */
+  struct genl_ops exmpl_gnl_ops_echo = {
+        .cmd = EXMPL_C_ECHO,		//只关心cmd为EXMPL_C_ECHO的消息
+        .flags = 0,
+        .policy = exmpl_genl_policy,
+        .doit = genl_recv_doit,
+        .dumpit = NULL,
+  };
+
+int stringlength(char *s)
+{
+    int slen = 0;
+    for(; *s; s++)
+    {
+        slen++;
+    }
+    return slen;
+}
+
+/*
+* genl_msg_prepare_usr_msg : 构建netlink及gennetlink首部
+* @cmd : genl_ops的cmd
+* @size : gen_netlink用户数据的长度（包括用户定义的首部）
+*/
+static inline int genl_msg_prepare_usr_msg(u8 cmd, size_t size, pid_t pid, struct sk_buff **skbp)
+{
+    struct sk_buff *skb;
+    /* create a new netlink msg */
+    skb = genlmsg_new(size, GFP_KERNEL);
+    if (skb == NULL) {
+        return -ENOMEM;
+    }
+    /* Add a new netlink message to an skb */
+    genlmsg_put(skb, pid, 0, &exmpl_gnl_family, 0, cmd);
+    *skbp = skb;
+    return 0;
+}
+
+/*
+* 添加用户数据，及添加一个netlink addribute
+*@type : nlattr的type
+*@len : nlattr中的len
+*@data : 用户数据
+*/
+static inline int genl_msg_mk_usr_msg(struct sk_buff *skb, int type, void *data, int len)
+{
+    int rc;
+    /* add a netlink attribute to a socket buffer */
+    if ((rc = nla_put(skb, type, len, data)) != 0) {
+        return rc;
+    }
+    return 0;
+}
+
+/**
+* genl_msg_send_to_user - 通过generic netlink发送数据到netlink
+*
+* @data: 发送数据缓存
+* @len: 数据长度 单位：byte
+* @pid: 发送到的客户端pid
+*/
+int genl_msg_send_to_user(void *data, int len, pid_t pid)
+{
+    struct sk_buff *skb;
+    size_t size;
+    void *head;
+    int rc;
+    printk("begin send to user\n");
+    size = nla_total_size(len); /* total length of attribute including padding */
+    
+    //构造netlink头部和genl netlink头部
+    rc = genl_msg_prepare_usr_msg(EXMPL_C_ECHO, size, pid, &skb);
+    printk("genl_msg_prepare_usr_msg\n");
+    if (rc) {
+        return rc;
+    }
+    //添加用户数据
+    rc = genl_msg_mk_usr_msg(skb, EXMPL_A_MSG, data, len);
+    printk("genl_msg_mk_usr_msg\n");
+    if (rc) {
+        kfree_skb(skb);
+        return rc;
+   }
+    printk("pid :%d",pid);
+    rc = genlmsg_unicast(&init_net, skb, pid);
+    printk("send end....\n");
+    if (rc < 0) {
+        return rc;
+    }
+    return 0;
+}
+
+int genl_recv_doit(struct sk_buff *skb, struct genl_info *info)
+{
+    struct nlmsghdr *nlhdr;
+    struct genlmsghdr *genlhdr;
+    struct nlattr *nla;
+    int len;
+    char* str;
+    char* data = "I am from kernel!";	//要回发给客户端的数据
+    int state = 0;
+    nlhdr = nlmsg_hdr(skb);	//获取netlink首部
+    genlhdr = nlmsg_data(nlhdr);	//获取genl netlink首部
+    nla = genlmsg_data(genlhdr);	//获取genl_netlink的payload
+    printk ("received\n");
+    str = (char *)NLA_DATA(nla);	//用户数据是一个attr，我们要获取其value
+    printk("%s\n",str);
+    len = stringlength(data);
+    
+    //向客户端回发数据 , 第3个参数为netlink 首部中的发送方pid
+    if ( (state = genl_msg_send_to_user(data, len, nlhdr->nlmsg_pid)) <0 )
+    {
+        printk(KERN_ERR "genl_msg_send_to_user error!");
+        return 1;
+    }
+    return 0;
+}
+
+int genetlink_init(void)
+{
+    int state=0;
+    
+    state = genl_register_family_with_ops(&exmpl_gnl_family, &exmpl_gnl_ops_echo);
+
+    printk(KERN_ERR "gennetlink register success!!!\n");
+    return 0;
+}
+void genetlink_exit(void)
+{
+    genl_unregister_family(&exmpl_gnl_family);
+    printk(KERN_ERR "gennetlink unregister.....\n");
+}
+module_init(genetlink_init);
+module_exit(genetlink_exit);
+
+MODULE_AUTHOR("test");
+MODULE_LICENSE("GPL");
+```
+
+### 2.5.2 用户态代码
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <string.h>
+#include <errno.h>
+#include <linux/genetlink.h>
+
+#define MAX_MSG_SIZE 256
+#define GENLMSG_DATA(glh) ((void *)(NLMSG_DATA(glh) + GENL_HDRLEN))
+#define NLA_DATA(na) ((void *)((char *)(na) + NLA_HDRLEN))
+/* attribute type */
+  enum {
+        EXMPL_A_UNSPEC,
+        EXMPL_A_MSG,
+        __EXMPL_A_MAX,
+  };
+  #define EXMPL_A_MAX (__EXMPL_A_MAX - 1)
+  /* commands */
+  enum {
+        EXMPL_C_UNSPEC,
+        EXMPL_C_ECHO,
+        __EXMPL_C_ECHO,
+  };
+  #define EXMPL_C_MAX (__EXMPL_C_MAX - 1)
+
+int genl_send_msg(int sock_fd, u_int16_t family_id, u_int32_t nlmsg_pid,
+        u_int8_t genl_cmd, u_int8_t genl_version, u_int16_t nla_type,
+        void *nla_data, int nla_len);
+static int genl_get_family_id(int sock_fd, char *family_name);
+void genl_rcv_msg(int family_id, int sock_fd, char *buf);
+
+typedef struct msgtemplate {
+    struct nlmsghdr nlh;
+    struct genlmsghdr gnlh;
+    char data[MAX_MSG_SIZE];
+} msgtemplate_t;
+
+static int genl_get_family_id(int sock_fd, char *family_name)
+{
+    msgtemplate_t ans;
+    int id, rc;
+    struct nlattr *na;
+    int rep_len;
+    //通过发送genl netlink消息获取family id
+    rc = genl_send_msg(sock_fd, GENL_ID_CTRL, 0, CTRL_CMD_GETFAMILY, 1,
+                    CTRL_ATTR_FAMILY_NAME, (void *)family_name,
+                    strlen(family_name)+1);
+    rep_len = recv(sock_fd, &ans, sizeof(ans), 0);
+    if (rep_len < 0) {
+        return 1;
+    }
+    if (ans.nlh.nlmsg_type == NLMSG_ERROR || !NLMSG_OK((&ans.nlh), rep_len))
+    {
+        return 1;
+    }
+    na = (struct nlattr *) GENLMSG_DATA(&ans);
+    na = (struct nlattr *) ((char *) na + NLA_ALIGN(na->nla_len));
+    if (na->nla_type == CTRL_ATTR_FAMILY_ID) {
+        id = *(__u16 *) NLA_DATA(na);
+    } else {
+        id = 0;
+    }
+    return id;
+}
+
+/**
+* genl_send_msg - 通过generic netlink给内核发送数据
+*
+* @sock_fd: 客户端socket
+* @family_id: family id
+* @nlmsg_pid: 客户端pid
+* @genl_cmd: 命令类型
+* @genl_version: genl版本号
+* @nla_type: netlink attr类型
+* @nla_data: 发送的数据
+* @nla_len: 发送数据长度
+*
+* return:
+* 0: 成功
+* -1: 失败
+*/
+int genl_send_msg(int sock_fd, u_int16_t family_id, u_int32_t nlmsg_pid,
+        u_int8_t genl_cmd, u_int8_t genl_version, u_int16_t nla_type,
+        void *nla_data, int nla_len)
+{
+    struct nlattr *na;
+    struct sockaddr_nl dst_addr;
+    int r, buflen;
+    char *buf;
+    msgtemplate_t msg;
+    if (family_id == 0) {
+        return 0;
+    }
+    msg.nlh.nlmsg_len = NLMSG_LENGTH(GENL_HDRLEN);
+    msg.nlh.nlmsg_type = family_id;
+    msg.nlh.nlmsg_flags = NLM_F_REQUEST;
+    msg.nlh.nlmsg_seq = 0;
+    msg.nlh.nlmsg_pid = nlmsg_pid;
+    msg.gnlh.cmd = genl_cmd;
+    msg.gnlh.version = genl_version;
+    na = (struct nlattr *) GENLMSG_DATA(&msg);
+    na->nla_type = nla_type;
+    na->nla_len = nla_len + 1 + NLA_HDRLEN;
+    memcpy(NLA_DATA(na), nla_data, nla_len);
+    msg.nlh.nlmsg_len += NLMSG_ALIGN(na->nla_len);
+    buf = (char *) &msg;
+    buflen = msg.nlh.nlmsg_len ;
+    memset(&dst_addr, 0, sizeof(dst_addr));
+    dst_addr.nl_family = AF_NETLINK;
+    dst_addr.nl_pid = 0;
+    dst_addr.nl_groups = 0;
+    while ((r = sendto(sock_fd, buf, buflen, 0, (struct sockaddr *) &dst_addr
+            , sizeof(dst_addr))) < buflen) {
+        if (r > 0) {
+            buf += r;
+            buflen -= r;
+        } else if (errno != EAGAIN) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+void genl_rcv_msg(int family_id, int sock_fd, char *buf)
+{
+    int ret;
+    struct msgtemplate msg;
+    struct nlattr *na;
+    ret = recv(sock_fd, &msg, sizeof(msg), 0);
+    if (ret < 0) {
+        return;
+    }
+    printf("received length %d\n", ret);
+    if (msg.nlh.nlmsg_type == NLMSG_ERROR || !NLMSG_OK((&msg.nlh), ret)) {
+        return ;
+    }
+    if (msg.nlh.nlmsg_type == family_id && family_id != 0) {
+        na = (struct nlattr *) GENLMSG_DATA(&msg);
+        strcpy(buf,(char *)NLA_DATA(na));
+    }
+}
+
+int main(int argc, char* argv[])
+{
+    struct sockaddr_nl src_addr, dest_addr;
+    struct nlmsghdr *nlh = NULL;
+    int sock_fd, retval;
+    int family_id = 0;
+    char *data;
+    // 创建 generic netlink socket 
+    sock_fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_GENERIC);
+    if(sock_fd == -1){
+        printf("error getting socket: %s", strerror(errno));
+        return -1;
+    }
+    // To prepare binding
+    memset(&src_addr, 0, sizeof(src_addr));
+    src_addr.nl_family = AF_NETLINK;
+    src_addr.nl_pid = getpid();
+    src_addr.nl_groups = 0;
+    //Bind
+    retval = bind(sock_fd, (struct sockaddr*)&src_addr, sizeof(src_addr));
+    if(retval < 0){
+        printf("bind failed: %s", strerror(errno));
+        close(sock_fd);
+        return -1;
+    }
+    
+    family_id = genl_get_family_id(sock_fd ,"myfamily");
+    printf("family_id:%d\n",family_id);
+    data =(char*)malloc(256);
+    if(!data)
+    {
+        perror("malloc error!");
+        exit(1);
+    }
+    memset(data,0,256);
+    strcpy(data,"Hello you!");
+    retval = genl_send_msg(sock_fd, family_id, 1234,EXMPL_C_ECHO, 1, EXMPL_A_MSG,(void *)data, strlen(data)+1);
+    printf("send message %d\n",retval);
+    if(retval<0)
+    {
+        perror("genl_send_msg error");
+        exit(1);
+    }
+    memset(data,0,256);
+    genl_rcv_msg(family_id,sock_fd,data);
+    printf("receive:%s",data);
+    close(sock_fd);
+    return 0;
+}
+```
+以上用户空间使用标准的socket API来接受/发送netlink消息， 必须自己处理netlink消息头以及generic netlink的family头， 工作较为繁琐， 开源世界已经提供了几个较为完备的基于netlink编程的框架， 其中最著名的就是 **libnl** ， 使用会简单很多。
 
 
 
