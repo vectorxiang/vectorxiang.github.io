@@ -10,7 +10,9 @@ Linux 平台目前常用针对无线网络设备的API有两套 wext (Wireless E
 
 这里主要介绍 nl80211 和 cfg80211 , 其中 ， cfg80211用于驱动开发， 而 nl80211 API供用户空间进程使用以操作那些利用cfg80211 API开发的无线网卡驱动。 使用 nl80211 的 tool 包括 : iw , crda , hostapd , wpa_supplicant(with **-Dnl80211**)   
 
-![](/images/network/cfg80211_architectrue.png ) 
+![](/images/network/wifi_architectrue.png) 
+
+这里 wpas, iw 和 hostapd 通过 libnl 提供的接口向 cfg80211 发送消息， 其消息中的 cmd 的数据参数等由 nl80211 定义， 目前做的几个 Qcom/BCM wifi chip 的 android project 都属于 FullMAC (硬件管理MLME的无线网卡类型)  , 所以 cfg80211 会直接调用到 wlan driver 的接口， 其主要调用通过 cfg80211_ops 结构体。 
 
 ## 2. nl80211 
 简单来说， nl80211的核心就是通过 netlink 机制向 Kernel 中的无线网卡驱动发送特定的消息。 只不过这些消息的类型、 参数等都由nl80211.h定义。   
@@ -93,6 +95,48 @@ enum nl80211_attrs {
 	NL80211_ATTR_MAX = __NL80211_ATTR_AFTER_LAST - 1
 };	
 ```
+上面给 family name 为 "nl80211" 的 gerneric netlink 发送了一个 cmd 为 NL80211_CMD_TRIGGER_SCAN 的消息 ,  我们来看 cfd80211 里面的代码 ：   
+
+```c
+@ kernel/net/wireless/nl80211.c
+
+static const struct genl_ops nl80211_ops[] = {
+	......
+	{
+		.cmd = NL80211_CMD_TRIGGER_SCAN,
+		.doit = nl80211_trigger_scan,
+		.policy = nl80211_policy,
+		.flags = GENL_ADMIN_PERM,
+		.internal_flags = NL80211_FLAG_NEED_WDEV_UP |
+				  NL80211_FLAG_NEED_RTNL,
+	},
+	......
+}
+
+static int nl80211_trigger_scan(struct sk_buff *skb, struct genl_info *info)
+{
+	// 只看关键代码
+	err = rdev_scan(rdev, request);
+	......
+}
+
+static inline int rdev_scan(struct cfg80211_registered_device *rdev,
+			    struct cfg80211_scan_request *request)
+{
+	int ret;
+	ret = rdev->ops->scan(&rdev->wiphy, request);
+	return ret;
+}	
+```
+这里会在调用到已注册的 cfg80211 device 的 cfg80211_ops 的scan 函数 , 在看 wlan driver 中的定义   
+
+```c
+static struct cfg80211_ops wlan_hdd_cfg80211_ops =
+{
+	.......
+	 .scan = wlan_hdd_cfg80211_scan,
+}
+```
 
 ### 2.2 libnl 简介
 鉴于netlink的复杂性， 开源世界提供了几个较为完备的基于netlink编程的框架， 其中最著名的就是[libnl](http://www.infradead.org/~tgr/libnl/)  :    
@@ -125,8 +169,51 @@ int nlmsg_total_size(int payloadlen);
  ![](/images/network/genl_libnl_struct_len.PNG ) 
  
 ```c
+/* nl_msg 的分配和释放 */
+struct nl_msg *nlmsg_alloc(void);
+void nlmsg_free(struct nl_msg *msg);
 
+;
+// nl_msg内部肯定会指向一个netlink消息头实例， 下面这个函数用于填充netlink消息头
+struct nlmsghdr *nlmsg_put(struct nl_msg *msg,
+	uint32_t port, uint32_t seqnr,
+	int nlmsg_type, int payload, int nlmsg_flags);
+	
+// 直接发送netlink消息
+int nl_sendto (struct nl_sock *sk, void *buf, size_t size)
+// 发送nl_msg消息
+int nl_send (struct nl_sock *sk, struct nl_msg *msg)
+int nl_send_simple(struct nl_sock *sk, int type,
+int flags,void *buf, size_t size);
+
+。
+// 核心接收函数。 nla参数用于存储发送端的地址信息。 creds用于存储权限相关的信息
+int nl_recv(struct nl_sock *sk, struct sockaddr_nl *nla,
+unsigned char **buf, struct ucred **creds)
+// 内部通过nl_recv接收消息， 然后通过cb回调结构体中的回调函数传给接收者
+int nl_recvmsgs (struct nl_sock *sk, struct nl_cb *cb)
 ```
+
+** libnl-genl API 介绍**    
+libnl-genl 基于libnl ， 封装了对generic netlink模块的处理 ：   
+
+```c
+// 根据family name字符串去查询family， 该函数内部实现将发送查询消息给Controller
+int genl_ctrl_resolve (struct nl_sock *sk, const char *name)
+
+// 和libnl的nl_connect类型， 只不过协议类型为GENERIC_NETLINK
+int genl_connect (struct nl_sock *sk)
+
+// genlmsg_put用于填充图中的nlmsghdr、 genlmsghder和用户自定义的消息头。 详细内容见下文
+void* genlmsg_put (struct nl_msg *msg, uint32_t port,
+	uint32_t seq, int family, int hdrlen,
+	int flags, uint8_t cmd, uint8_t version)
+
+// 用于获取genl消息中携带的nlattr内容
+struct nlattr* genlmsg_attrdata(const struct genlmsghdr *gnlh,int hdrlen)
+```
+ 
+
 
 
  
