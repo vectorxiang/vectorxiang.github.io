@@ -95,7 +95,7 @@ enum nl80211_attrs {
 	NL80211_ATTR_MAX = __NL80211_ATTR_AFTER_LAST - 1
 };	
 ```
-上面给 family name 为 "nl80211" 的 gerneric netlink 发送了一个 cmd 为 NL80211_CMD_TRIGGER_SCAN 的消息 ,  我们来看 cfd80211 里面的代码 ：   
+上面给 family name 为 "nl80211" 的 gerneric netlink 发送了一个 cmd 为 NL80211_CMD_TRIGGER_SCAN 的消息 ,  我们来看 cfg80211 里面的代码 ：   
 
 ```c
 @ kernel/net/wireless/nl80211.c
@@ -211,6 +211,72 @@ void* genlmsg_put (struct nl_msg *msg, uint32_t port,
 
 // 用于获取genl消息中携带的nlattr内容
 struct nlattr* genlmsg_attrdata(const struct genlmsghdr *gnlh,int hdrlen)
+```
+
+### 2.3 cfg80211
+在 cfg80211 中每个设备的基础结构体为 wiphy    
+
+```c
+@ kernel/include/net/cfg80211.h
+
+struct wiphy {
+	u8 perm_addr[ETH_ALEN];	// 固定的设备mac地址
+	/* 如果设备支持使用掩码多mac地址，则可根据掩码将相应的标志位置1
+	   例如，最后四位可变，则该成员设置为 00-00-00-00-00-0f     */
+	u8 addr_mask[ETH_ALEN];	//  
+
+	/* 如果设备有多个mac地址，这这个指针指向地址列表，第一个地址就是默认perm_addr */
+	struct mac_address *addresses;
+	......
+};
+```
+相关接口  
+
+```c
+// 创建 wiphy
+struct wiphy *wiphy_new(const struct cfg80211_ops *ops, int sizeof_priv);
+
+// driver 需要定义自己的 cfg80211_ops
+struct cfg80211_ops {
+	int	(*suspend)(struct wiphy *wiphy, struct cfg80211_wowlan *wow);
+	int	(*resume)(struct wiphy *wiphy);
+	
+	......
+
+	int	(*scan)(struct wiphy *wiphy,
+			struct cfg80211_scan_request *request);
+	void	(*abort_scan)(struct wiphy *wiphy, struct wireless_dev *wdev);
+
+	int	(*auth)(struct wiphy *wiphy, struct net_device *dev,
+			struct cfg80211_auth_request *req);
+	int	(*assoc)(struct wiphy *wiphy, struct net_device *dev,
+			 struct cfg80211_assoc_request *req);
+	int	(*deauth)(struct wiphy *wiphy, struct net_device *dev,
+			  struct cfg80211_deauth_request *req);
+	int	(*disassoc)(struct wiphy *wiphy, struct net_device *dev,
+			    struct cfg80211_disassoc_request *req);
+
+	int	(*connect)(struct wiphy *wiphy, struct net_device *dev,
+			   struct cfg80211_connect_params *sme);
+	int	(*disconnect)(struct wiphy *wiphy, struct net_device *dev,
+			      u16 reason_code);
+	......
+}
+
+// 为wiphy设置设备指针
+void set_wiphy_dev(struct wiphy * wiphy, struct device * dev) 
+
+// 在cfg80211 中注册 wiphy
+int wiphy_register(struct wiphy * wiphy) 
+
+// 在cfg80211中注销一个wiphy
+void wiphy_unregister(struct wiphy * wiphy) 
+
+// 释放创建好的 wiphy
+void wiphy_free(struct wiphy * wiphy) 
+
+// 获取wiphy的私有数据
+void * wiphy_priv(struct wiphy * wiphy) 
 ```
  
 
