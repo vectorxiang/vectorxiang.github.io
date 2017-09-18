@@ -279,7 +279,7 @@ void wiphy_free(struct wiphy * wiphy)
 void * wiphy_priv(struct wiphy * wiphy) 
 ```
  
- # 3. WEXT
+# 3. WEXT
 wext 与 nl80211 的主要不同之处在于用户层与 driver 通信的方式为 ioctrl , 使用该接口的tool 有 ifconfig , iwpriv 等。  
 
 先来看一下 iwpriv 是如何下指令给 driver   
