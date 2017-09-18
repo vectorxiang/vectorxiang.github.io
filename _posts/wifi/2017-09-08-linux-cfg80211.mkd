@@ -1,6 +1,6 @@
 ---
 layout: post
-title: "cfg80211 & wext 简介"
+title: "cfg80211 & wext"
 category: wifi
 tags: [network, android , wifi, linux]
 catalog: true
