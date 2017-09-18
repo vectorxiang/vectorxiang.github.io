@@ -4,12 +4,13 @@ title:  "Bluetooth Overview"
 date:   2015-10-27
 categories: [bluetooth]
 header-img: "img/home-bg.jpg"
-tags:
-    - Bluetooth
+tags: Bluetooth
+catalog: true
 ---
 
-#RADIO SPECIFICATION
-##1. 工作频段
+# RADIO SPECIFICATION  
+
+## 1. 工作频段
 蓝牙工作在2.4G的频段。RF通道就是我们通常说的传输的通道，它一共有79个通道(BLE为40个通道)，从2.402GHz开始，每隔1MHz有一个RF通道。
 
 
@@ -18,7 +19,7 @@ tags:
 
 蓝牙采用跳频技术 (Frequency-Hopping Spread Spectrum)，將時間切成一段一段的時槽，每个时槽的长度为625μs ， 每換一時槽即換一頻道 ，其跳頻速率為**1600hops/sec(=1000000微秒/625微秒)**（注意：在page 和 Inquiry 跳频为 3200跳/s） 。其主要目的是避免干扰和安全考虑 。蓝牙网络中依据master的mac地址和Clock来决定一个伪随机跳频序列，整个网络上的设备根据这个序列同时切换通道。
 
-##2. 传输速度
+## 2. 传输速度
 蓝牙的调制方式分为 Basic Rate 和 Enhanced Data Rate ,其中前者是必须实现的。另外 Enhanced Data Rate 使用 PSK 调制方式有两个变种 ： π/4-DQPSK 和 8DPSK 。他们的数据传输数度分别为：
 
 * Basic Rate : GFSK **1Mbps**
@@ -27,23 +28,24 @@ tags:
 蓝牙3.0+HS 集成802.11PAL最高速度可达*24Mbps*，是2.0速度的8倍。
 
 
-##3. 传输功率
+## 3. 传输功率
 蓝牙的传输功率分为3个级别，通常情况下传输距离分别在100、10、1米范围内。
 ![bt_power_class](/images/bluetooth/bt_power_class.png)
 
-#BASEBAND SPECIFICATION
-##1. 时钟
+# BASEBAND SPECIFICATION 
+
+## 1. 时钟
 蓝牙的时钟为<font color=red>3.2kHz</font>。就使用的时钟而言，master就是使用的它的native的时钟，而slave则是在它的native时钟上加上对应的offset得到和master同步的时钟。这个offset是在inquiry过程中交互得到的。为了防止时钟的偏移，slave在每次收到master的packet的时候都需要刷新offset。
 
 ![bt_clock](/images/bluetooth/bt_clock.png)
 
-##2. 蓝牙设备地址
+## 2. 蓝牙设备地址
 每一个蓝牙设备都会被分配唯一一个48位bt_addr，该地址的结构如下图，其中分为LAP(24位地址低端部分)、UAP(8位地址高端部分)和NAP(16位无意义地址部分)。<font color=red>其中,NAP和UAP是生产厂商的唯一标识码，必须由蓝牙权威部门分配给不同的厂商</font>，而LAP是由厂商内部自由分配。
 >其中NAP和UAP可以在[IEEE](http://standards-oui.ieee.org/oui.txt)查询到
 
 ![bt_addr](/images/bluetooth/bt_addr.png)
 
-##3. 物理信道(Physical Channel)
+## 3. 物理信道(Physical Channel)
 Physical Channel是piconet区分的标准，它是蓝牙系统结构层次中的最底层了。不同物理信道(意味着不同piconet)有不同时钟和调频序列 HFSS(frequency hopping spread spectrum) 。Physical Channel通常可以分为四种类型：
 
 1. **basic piconet channel**：两个已经连接设备之间通信使用
@@ -59,7 +61,7 @@ Physical Channel是piconet区分的标准，它是蓝牙系统结构层次中的
 inquiry 和 page scan channel 与上面最大的不同之处在于为了更好地利用时间，他不是625μs才发送一次，而是在625μs中发送了两次，也就是312.5μs发送一次，这也是蓝牙clk最小的时间间隔了。于是从master的角度来看，我们可以看到的内容就如下图所示了。
 ![bt_page_channnel](/images/bluetooth/bt_page_channel.png)
 
-##4. 逻辑传输
+## 4. 逻辑传输
 一个master在同一个物理通道上是可以对应多个slave的。在逻辑层，是通过一个称之为“逻辑传输地址”（LT_ADDR）来进行区分各个slave的。它的长度是3个bit，全0是用来广播的。因为是用来区分slave的，所以只有slave才有这个地址，master是没有的。需要注意的是这个地址只有在slave活跃的时候才有效，当他断开或者parked的时候，这个地址就立即没有了。
 
 目前来看一共有5种类型的逻辑传输层位于物理链路上。他们分别是：
@@ -71,7 +73,7 @@ inquiry 和 page scan channel 与上面最大的不同之处在于为了更好�
 5. PSB: ParkedSlave Broadcast    ​休眠的slave关闭逻辑传输
 6. CSB: Connectionless Slave Broadcast (CSB) logical transport.
 
-##5. PACKETS
+## 5. PACKETS
 数据包的格式根据 base rate 和 enhanced data rate 又有不同。
 **Basic Rate：**
 ![bt_br_packet](/images/bluetooth/bt_br_packet.png)   

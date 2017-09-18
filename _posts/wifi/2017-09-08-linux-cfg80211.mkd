@@ -1,7 +1,7 @@
 ---
 layout: post
-title: "cfg80211"
-category: android wifi
+title: "cfg80211 & wext 简介"
+category: wifi
 tags: [network, android , wifi, linux]
 catalog: true
 ---
@@ -14,8 +14,8 @@ Linux 平台目前常用针对无线网络设备的API有两套 wext (Wireless E
 
 这里 wpas, iw 和 hostapd 通过 libnl 提供的接口向 cfg80211 发送消息， 其消息中的 cmd 的数据参数等由 nl80211 定义， 目前做的几个 Qcom/BCM wifi chip 的 android project 都属于 FullMAC (硬件管理MLME的无线网卡类型)  , 所以 cfg80211 会直接调用到 wlan driver 的接口， 其主要调用通过 cfg80211_ops 结构体。 
 
-## 2. nl80211 
-简单来说， nl80211的核心就是通过 netlink 机制向 Kernel 中的无线网卡驱动发送特定的消息。 只不过这些消息的类型、 参数等都由nl80211.h定义。   
+## 2. nl80211 & cfg80211 
+简单来说， nl80211的核心就是通过 netlink 机制向 Kernel 中的 cfg80211 无线网卡驱动发送特定的消息。 只不过这些消息的类型、 参数等都由nl80211.h定义。   
 
 ### 2.1 scan 举例
 以下通过 nl80211 触发driver 扫描为例 ：   
@@ -279,7 +279,177 @@ void wiphy_free(struct wiphy * wiphy)
 void * wiphy_priv(struct wiphy * wiphy) 
 ```
  
+ # 3. WEXT
+wext 与 nl80211 的主要不同之处在于用户层与 driver 通信的方式为 ioctrl , 使用该接口的tool 有 ifconfig , iwpriv 等。  
 
+先来看一下 iwpriv 是如何下指令给 driver   
+
+```c
+int
+main(int	argc,
+     char **	argv)
+{
+	skfd = iw_sockets_open();
+		=>  sock = socket(AF_INET, SOCK_DGRAM, 0);
+	......
+	set_private(skfd, argv + 2, argc - 2, argv[1]);
+}
+
+static inline int
+set_private(int		skfd,		/* Socket */
+	    char *	args[],		/* Command line args */
+	    int		count,		/* Args count */
+	    char *	ifname)		/* Dev name */
+{
+  iwprivargs *	priv;
+  int		number;		/* Max of private ioctl */
+  int		ret;
+
+  /* 获取wireless网卡所能处理的所有 wlan_private_args 类型 */
+  number = iw_get_priv_info(skfd, ifname, &priv);
+
+  /* Is there any ? */
+  if(number <= 0)
+    {
+      ......
+      return(-1);
+    }
+
+  /* Do it */
+  ret = set_private_cmd(skfd, args + 1, count - 1, ifname, args[0],
+			priv, number);
+}
+```
+set_private 中先查需该设备支援的 private ioctls ， 如不为 0 则在来执行 ， 这里最后都是调用 ioctrl , 这里以 iw_get_priv_info 来看一下流程  
+
+```c
+int
+iw_get_priv_info(int		skfd,
+		 const char *	ifname,
+		 iwprivargs **	ppriv)
+{
+  struct iwreq		wrq;
+  iw_get_ext(skfd, ifname, SIOCGIWPRIV, &wrq)
+ 
+static inline int
+iw_get_ext(int			skfd,		/* Socket to the kernel */
+	   const char *		ifname,		/* Device name */
+	   int			request,	/* WE ID */
+	   struct iwreq *	pwrq)		/* Fixed part of the request */
+{
+  strncpy(pwrq->ifr_name, ifname, IFNAMSIZ);
+  return(ioctl(skfd, request, pwrq));
+}
+```
+ 到这里向 socket 句柄发送 ioctrl ,  cmd 为 SIOCGIWPRIV ， 参数为结构体 iwreq 其中会包含网络设备的 ifname . 下面在来看 kernel 中如何处理 
+ 
+ ```c
+ @ kernel/net/core/dev_ioctl.c
+ 
+ => dev_ioctl
+ 	default:
+		/* Take care of Wireless Extensions */
+		if (cmd >= SIOCIWFIRST && cmd <= SIOCIWLAST)
+			return wext_handle_ioctl(net, &ifr, cmd, arg);
+
+@ kernel/net/wireless/wext-core.c
+
+=> wext_handle_ioctl
+	struct iw_request_info info = { .cmd = cmd, .flags = 0 };
+	ret = wext_ioctl_dispatch(net, ifr, cmd, &info,
+				  ioctl_standard_call,
+				  ioctl_private_call);
+	// 当为执行成功且 cmd 为get 时将结构返回给上层
+	if (ret >= 0 &&
+	    IW_IS_GET(cmd) &&	//  IW_IS_GET(cmd)	((cmd) & 0x1)
+	    copy_to_user(arg, ifr, sizeof(struct iwreq)) )
+=> wext_ioctl_dispatch
+=> wireless_process_ioctl
+ ```
+ 仔细看一下 wireless_process_ioctl
+ 
+ ```c
+ static int wireless_process_ioctl(struct net *net, struct ifreq *ifr,
+				  unsigned int cmd,
+				  struct iw_request_info *info,
+				  wext_ioctl_func standard,
+				  wext_ioctl_func private)
+{
+ 	dev = __dev_get_by_name(net, ifr->ifr_name);
+	
+	/*  所以这里 cmd 为 SIOCGIWPRIV 时是执行这里
+	 *  实际执行就是其参数 iw_handler_get_private 
+	 *  其中会填充 iwreq_data 的 data.length 为  
+	 *  wireless_handlers->num_private_args 
+	 *   pointer 指向  wireless_handlers->private_args*/
+	if (cmd == SIOCGIWPRIV && dev->wireless_handlers)
+	return standard(dev, iwr, cmd, info,
+			iw_handler_get_private);
+			
+	
+	/* New driver API : try to find the handler */
+	handler = get_handler(dev, cmd);
+	==> get_handler
+		#ifdef CONFIG_WIRELESS_EXT
+			if (dev->wireless_handlers)
+				handlers = dev->wireless_handlers;
+		#endif
+		/* Try as a standard command */
+		index = IW_IOCTL_IDX(cmd);
+		if (index < handlers->num_standard)
+			return handlers->standard[index];
+		
+	if (handler) {
+		/* Standard and private are not the same */
+		if (cmd < SIOCIWFIRSTPRIV)
+			return standard(dev, iwr, cmd, info, handler);
+		else if (private)
+			return private(dev, iwr, cmd, info, handler);
+	}
+	
+	/* Old driver API : call driver ioctl handler */
+	if (dev->netdev_ops->ndo_do_ioctl)
+		return dev->netdev_ops->ndo_do_ioctl(dev, ifr, cmd);
+}
+ ```
+ 这里只关注新的 driver API ,  回头来看这里的 standard 和 private 是前面传进来的函数指针 ioctl_standard_call 和 ioctl_private_call ,  在根据cmd 为 standard 或者 private 分别调用 。他们最终调用的都是  wireless_handlers 中的 standard 和 
+ private 数组中的相应函数 。 
+ 
+所以上面 iw_get_priv_info 直接返回driver 中 wireless_handlers->num_private_args ， iwprivargs 指向从driver 中copy 的 wireless_handlers->private_args  ， 其为 iw_priv_args 结构体数组  
+
+```c
+struct iw_priv_args {
+  __u32 cmd;
+  __u16 set_args;
+  __u16 get_args;
+  char name[IFNAMSIZ];
+};
+```   
+其中会包括每条command 的 cmd , set/get 参数个数 和 cmd 的对应 string name.  接下来的 set_private_cmd 中根据用户的 command 来匹配对应的 cmd 然后iotrl 给driver .    
+
+综上， driver 中只需指定  net_dev->wireless_handlers   iw_handler_def 结构体, 即可在用户空间调用 iwpriv 或者 ifconfig 调用实现的功能   
+
+```c
+struct iw_handler_def {
+
+	const iw_handler *	standard;
+	__u16			num_standard;
+
+	__u16			num_private;
+	__u16			num_private_args;
+	const iw_handler *	private;
+
+	const struct iw_priv_args *	private_args;
+
+	struct iw_statistics*	(*get_wireless_stats)(struct net_device *dev);
+};
+```
+
+
+ 
+ 
+
+ 
 
 
  

@@ -2,7 +2,7 @@
 layout: post
 title:  "Wifi Scan in Settings"
 date:   2016-05-18
-category: android wifi
+category: wifi
 tags: [network, android , wifi]
 ---
 

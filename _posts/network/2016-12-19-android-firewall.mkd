@@ -95,7 +95,7 @@ int FirewallController::attachChain(const char* childChain, const char* parentCh
 
 大概看一下这里 doze chain 的内容:     
 
-<center>![](/images/network/android_iptable_doze.png)</center> 
+![](/images/network/android_iptable_doze.png)</center> 
 这里可以看到会先检查前面的3个rule ， 如果有符合的直接return 否则检查到最后一项全部 drop.  这里在大概看一下第一项中的 "owner UID match u0_a26" ，这里需要查询一下 u0_a26 表示的package.    
 这里 u0_a26 的打印方式可以参考 [https://zhuanlan.zhihu.com/p/22620803?refer=kelvin-love-wmy](https://zhuanlan.zhihu.com/p/22620803?refer=kelvin-love-wmy) , 这里 u0_a26 即为UID 10026, 通过 UID 可以在 /data/system/packages.list 中查询到. 
 

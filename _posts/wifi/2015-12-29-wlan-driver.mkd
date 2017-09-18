@@ -2,7 +2,7 @@
 layout: post
 title: "Qualcomm 之 wlan driver"
 description:
-category: android wifi
+category: wifi
 tags: [network, android , wifi]
 mathjax: 
 chart:

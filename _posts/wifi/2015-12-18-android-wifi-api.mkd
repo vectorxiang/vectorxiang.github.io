@@ -2,7 +2,7 @@
 layout: post
 title: "Android之wifi相关API"
 description:
-category: android wifi
+category: wifi
 tags: [network, android , wifi]
 mathjax: 
 chart:

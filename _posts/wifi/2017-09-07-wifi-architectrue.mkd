@@ -3,7 +3,8 @@ layout: post
 title:  "wifi architectrue 简介"
 date:   2017-09-07
 catalog:	true
-categories: [android wifi]
+categories: wifi
+tags: [network, android , wifi, linux]
 ---
 Android 的 wifi 结构主要可以分为两个部分
 1. 数据包的收发 

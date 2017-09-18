@@ -2,11 +2,8 @@
 layout: post
 title: "Wifi Scan in WAPS"
 description:
-category: android wifi
+category: wifi
 tags: [network, android , wifi]
-mathjax: 
-chart:
-comments: false
 ---
 #Scan
 回顾一下 ：

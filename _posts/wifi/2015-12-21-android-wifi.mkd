@@ -2,7 +2,7 @@
 layout: post
 title: "Android 之 wifi 简介"
 description:
-category: android wifi
+category: wifi
 tags: [network, android , wifi]
 mathjax: 
 chart:

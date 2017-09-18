@@ -2,7 +2,7 @@
 layout: post
 title: "Qualcomm wifi RF test"
 description:
-category: wifi_rf
+category: wifi
 tags: [rf, android , wifi]
 mathjax: 
 chart:

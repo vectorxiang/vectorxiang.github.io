@@ -2,7 +2,7 @@
 layout: post
 title: "wifi bettery"
 description:
-category: android wifi
+category: wifi
 tags: [network, android , wifi]
 mathjax: 
 chart:

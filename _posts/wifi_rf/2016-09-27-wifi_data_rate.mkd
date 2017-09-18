@@ -2,8 +2,8 @@
 layout: post
 title: "WIFI data rate"
 description:
-category: wifi_rf
-tags: [rf,wifi]
+category: wifi
+tags: [wifi]
 mathjax: 
 chart:
 comments: false
