@@ -1,0 +1,31 @@
+---
+layout: post
+title:  "Bluetooth 之 bluedroid A2DP"
+date:   2017-09-20
+categories: [bluetooth]
+tags: Bluetooth
+catalog: true
+---
+
+
+```c
+@ system/bt/btif/src/btif_av.c
+
+static const btav_interface_t bt_av_src_interface = {
+    sizeof(btav_interface_t),
+    init_src,
+    src_connect_sink,
+    disconnect,
+    cleanup_src,
+    NULL,
+    NULL,
+    allow_connection,
+};
+```
+
+
+
+
+
+
+ 

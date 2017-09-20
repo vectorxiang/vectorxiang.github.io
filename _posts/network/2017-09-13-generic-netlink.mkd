@@ -217,6 +217,7 @@ int genl_unregister_family(struct genl_family *family);
 ```
 
 ## 2.5 示例
+
 ### 2.5.1 内核注册generic fmily和operation代码
 ```c
 #include <linux/module.h>

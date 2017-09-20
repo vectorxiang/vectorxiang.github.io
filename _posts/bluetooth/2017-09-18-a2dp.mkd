@@ -287,7 +287,7 @@ static void initNative(JNIEnv *env, jobject object, jint maxA2dpConnections,
 classInitNative 的作用上按照方法名找到 java类 中的方法ID , 这样当底层有信息返回时可以通过这些方法直接调用到 java 类的方法。   
 initNative 的作用是获取 bluedroid 中的 BT_PROFILE_ADVANCED_AUDIO_ID 接口并调用其中的 init 。 
 
-### 2.2.3 Bluedroid
+### 2.2.3 bluedroid interface
 bluedroid 中 A2DP 的 interface 定义如下 ， get_profile_interface(BT_PROFILE_ADVANCED_AUDIO_ID) 获取到的也是他  ：  
 
 ```c
@@ -334,7 +334,7 @@ static const btav_interface_t bt_av_src_interface = {
     allow_connection,
 };
 ```
-
+bluedroid 中的更多介绍可以看后续的笔记。
 
 
 
