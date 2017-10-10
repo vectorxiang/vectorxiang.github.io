@@ -64,7 +64,7 @@ code {
 }
 
 .highlight .go {
-  color: #7FFFD4;
+  color: #888888;
 }
 
 .highlight .gp {
@@ -87,21 +87,21 @@ code {
 
 .highlight .cm,
 .highlight .ch {
-  color: #75715e;
+  color: #8DEEEE;
   font-style: italic;
 }
 
 .highlight .cp {
-  color: #75715e;
+  color: #8DEEEE;
 }
 
 .highlight .c1 {
-  color: #75715e;
+  color: #8DEEEE;
   font-style: italic;
 }
 
 .highlight .cs {
-  color: #75715e;
+  color: #8DEEEE;
   background-color: #ff9090
 }
 
@@ -112,7 +112,7 @@ code {
 }
 
 .highlight .err {
-  color: #98FB98;
+  color: #59584e;
   font-style: italic;
 }
 
