@@ -64,7 +64,7 @@ code {
 }
 
 .highlight .go {
-  color: #888888;
+  color: #7FFFD4;
 }
 
 .highlight .gp {
@@ -112,7 +112,7 @@ code {
 }
 
 .highlight .err {
-  color: #59584e;
+  color: #98FB98;
   font-style: italic;
 }
 
