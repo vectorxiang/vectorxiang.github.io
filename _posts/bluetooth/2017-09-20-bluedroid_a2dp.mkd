@@ -8,7 +8,7 @@ catalog: true
 ---
 根据功能 bluedroid 中 a2dp 主要分为两个部分， 连接控制和数据传输。  
 控制部分用来控制连接断开和其他相关属性， 这部分向上层提供接口 btav_interface_t 。  
-传输部分 bluedroid （system/bt/audio_a2dp_hw）中会编译出  **audio.a2dp.default.so ** ， 其中实现了 audio output devices  的两个 interface ：  audio_hw_device 和 audio_stream_out ,  其中会将 data 通过socket 传给 bluedroid .   
+传输部分 bluedroid （system/bt/audio_a2dp_hw）中会编译出  **audio.a2dp.default.so** ， 其中实现了 audio output devices  的两个 interface ：  audio_hw_device 和 audio_stream_out ,  其中会将 data 通过socket 传给 bluedroid .   
 
 先来看 btav_interface_t 中是如何 init bluedroid a2dp 
 
@@ -20,7 +20,7 @@ static bt_status_t init_src(btav_callbacks_t* callbacks, int max_a2dp_connection
                             int a2dp_multicast_state, const char* offload_cap)
 {
     .....
-    
+    	 //目前上层传下来的 offload_cap 为null
          if (offload_cap)
         {
             bt_split_a2dp_enabled = TRUE;
