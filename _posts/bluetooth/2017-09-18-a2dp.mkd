@@ -51,7 +51,7 @@ A2DP 基于AVDTP 连接之上， 先来看一下 AVDTP 中的两个重要概念
 **Stream End Point (SEP)** : 提供具体传输特定 AV capabilities 功能的服务 ， A2DP 中会根据不同的 codec 或者参数注册不同的 SEP   
 **Stream End Point Identifier (SEID)**：标识Stream End Point的 ID   
 
-AVDTP 中主要会建立两个 channel 连接 Signalling Channel 和 Media Transport Channel 
+AVDTP 中主要会建立两种 channel 连接：  Signalling Channel 和 Media Transport Channel 
 ![](/images/bluetooth/bt_a2dp_avdtp_channel.png)  
 
 AVDTP 完整的 Stream End-point Discovery to Stream Release过程：  
@@ -285,7 +285,7 @@ static void initNative(JNIEnv *env, jobject object, jint maxA2dpConnections,
 }
 ```
 classInitNative 的作用上按照方法名找到 java类 中的方法ID , 这样当底层有信息返回时可以通过这些方法直接调用到 java 类的方法。   
-initNative 的作用是获取 bluedroid 中的 BT_PROFILE_ADVANCED_AUDIO_ID 接口并调用其中的 init 。 
+initNative 的作用是获取 bluedroid 中的 BT_PROFILE_ADVANCED_AUDIO_ID 接口并调用其中的 init , init 中会包将刚才classInitNative 获取到的 callback 函数指针传给 bluedroid 。 
 
 ### 2.2.3 bluedroid interface
 bluedroid 中 A2DP 的 interface 定义如下 ， get_profile_interface(BT_PROFILE_ADVANCED_AUDIO_ID) 获取到的也是他  ：  
