@@ -145,13 +145,44 @@ static void btif_media_thread_init(UNUSED_ATTR void *context) {
   APPL_TRACE_DEBUG(" btif_media_thread_init complete");
 }
 ```
-可以看到这里主要函数为 **UIPC_Init** 和 **UIPC_Open** , 他们的作用是什么呢？   
+这里主要函数为 **UIPC_Init** 和 **UIPC_Open** , 他们的作用是什么呢？   
 Audio Flinger 加载 audio_a2dp_hw 来向 bluedroid 传输数据， 而他们通信的方式就是通过两个socket :   
 
 	#define A2DP_CTRL_PATH "/data/misc/bluedroid/.a2dp_ctrl"
 	#define A2DP_DATA_PATH "/data/misc/bluedroid/.a2dp_data"
 	
-从名字可以看出一个是用来控制，另一个是用来传输。 而其中第一个socket 就是在这里创建的 ， 其事件的处理函数为 btif_a2dp_ctrl_cb .  
+从名字可以看出一个是用来控制，另一个是用来传输。 UIPC_Init 中初始化 uipc_main ,  这里的 UIPC_Open 中创建 a2dp_ctrl  socket , 其事件处理函数为 btif_a2dp_ctrl_cb 。 来看一下这里的结构  ：  
+
+```c
+static tUIPC_MAIN uipc_main;
+
+typedef struct {
+    pthread_t tid;     // event 处理线程 uipc_read_task
+    int running;	     // uipc_read_task 状态
+    pthread_mutex_t mutex;
+
+    fd_set active_set;    // uipc_read_task 中监听的fd集合
+    fd_set read_set;	   // 等于active_set
+    int max_fd;
+    int signal_fds[2];	  // interrupt socket pair
+
+    tUIPC_CHAN ch[UIPC_CH_NUM];	 //包含 a2dp_ctrl ， a2dp_data 的socket fd 的结构体
+} tUIPC_MAIN;
+```
+其中两个 tUIPC_CHAN 变量,  分别对应 a2dp_ctrl ， a2dp_data    
+
+```c
+typedef struct {
+    int srvfd;	// server socket fd
+    int fd;		// 连接的socket fd
+    int read_poll_tmo_ms;
+    int task_evt_flags;   /* event flags pending to be processed in read task */
+    tUIPC_EVENT cond_flags;
+    pthread_mutex_t cond_mutex;
+    pthread_cond_t  cond;
+    tUIPC_RCV_CBACK *cback;	   //event 处理函数
+} tUIPC_CHAN;
+```
 
 ### 1.3 btif_enable_service
 ```c
@@ -232,7 +263,7 @@ bt_status_t btif_av_execute_service(BOOLEAN b_enable)
 }
 ```
 
-## BTA_AvEnable
+### 2.1 BTA_AvEnable
 ```c
 void BTA_AvEnable(tBTA_SEC sec_mask, tBTA_AV_FEAT features, tBTA_AV_CBACK *p_cback)
 {
@@ -360,7 +391,8 @@ static void bta_av_api_enable(tBTA_AV_DATA *p_data)
     (*bta_av_cb.p_cback)(BTA_AV_ENABLE_EVT, (tBTA_AV *)&enable);
 }
 ```
-这里最后实际将 BTA_AV_ENABLE_EVT 交给 btif_av_cb[index].sm_handle 当前states 的 handler 来处理， 当前为 IDLE 状态由 btif_av_state_idle_handler 来处理， 这里的处理仅仅是打印了一行log :  
+这里主要是初始化 bta 中的 a2dp control block : bta_av_cb .   
+最后将 BTA_AV_ENABLE_EVT 交给 btif_av_cb[index].sm_handle 当前states 的 handler 来处理， 当前为 IDLE 状态由 btif_av_state_idle_handler 来处理， 这里的处理仅仅是打印了一行log :  
 
 ```c
 static BOOLEAN btif_av_state_idle_handler(btif_sm_event_t event, void *p_data, int index)
@@ -370,7 +402,7 @@ static BOOLEAN btif_av_state_idle_handler(btif_sm_event_t event, void *p_data, i
             break;
 ```
 
-## BTA_AvRegister
+### 2.2 BTA_AvRegister
 继续 btif_av_execute_service 的第二个函数 BTA_AvRegister   
 
 ```c
@@ -392,8 +424,43 @@ void BTA_AvRegister(tBTA_AV_CHNL chnl, const char *p_service_name, UINT8 app_id,
 ```
 发送 BTA_AV_API_REGISTER_EVT 到 bta 层 ， 和前面一样最后根据event 中的 service id 交给对应的 handler 处理， a2dp 的处理函数为 bta_av_hdl_event ， BTA_AV_API_REGISTER_EVT 对应的处理函数为 bta_av_api_register .
 
-这里代码比较多，总结起来主要功能是添加 AVDTP SEP 。
+```c
+/*******************************************************************************
+** Description      allocate stream control block,
+**                  register the service to stack
+**                  create SDP record
+*******************************************************************************/
+static void bta_av_api_register(tBTA_AV_DATA *p_data)
+{
+        if(registr.chnl == BTA_AV_CHNL_AUDIO)
+        {
+            /* set up the audio stream control block */
+            APPL_TRACE_EVENT("AV: set up the audio stream control block ");
+            p_scb->p_act_tbl = (const tBTA_AV_ACT *)bta_av_a2d_action;
+            p_scb->p_cos     = &bta_av_a2d_cos;
+            p_scb->media_type= AVDT_MEDIA_AUDIO;
+            cs.cfg.psc_mask  = AVDT_PSC_TRANS;
+            cs.media_type    = AVDT_MEDIA_AUDIO;
+            cs.mtu           = p_bta_av_cfg->audio_mtu;
+            cs.flush_to      = L2CAP_DEFAULT_FLUSH_TO;
+            ......
 
-
+            if(!bta_av_cb.reg_audio)
+            {
+                bta_av_cb.sdp_a2d_handle = 0;
+                if (profile_initialized == UUID_SERVCLASS_AUDIO_SOURCE)
+                {
+                    /* create the SDP records on the 1st audio channel */
+                    bta_av_cb.sdp_a2d_handle = SDP_CreateRecord();
+                    A2D_AddRecord(UUID_SERVCLASS_AUDIO_SOURCE, p_service_name, NULL,
+                                  A2D_SUPF_PLAYER, bta_av_cb.sdp_a2d_handle);
+                    bta_sys_add_uuid(UUID_SERVCLASS_AUDIO_SOURCE);
+                }
+                /* start listening when A2DP is registered */
+                ......
+            }
+```
+这里主要用来初始化 stream control block 即 bta_av_cb.p_scb ， 其中包含 AVDTP END POINT 的信息， 此外在创建 "Advanced Audio" SDP record . 
+ 
 
  
