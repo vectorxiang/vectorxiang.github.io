@@ -1,42 +1,14 @@
-/* to make lines scroll instead of wrap */
-/* from http://stackoverflow.com/a/23393920 */
-
-.highlight pre code * {
-  white-space: nowrap;    // this sets all children inside to nowrap
-}
-
-.highlight pre {
-  overflow-x: auto;       // this sets the scrolling in x
-}
-
-.highlight pre code {
-  white-space: pre;       // forces <code> to respect <pre> formatting
-}
-
-
 /*
  * GitHub style for Pygments syntax highlighter, for use with Jekyll
  * Courtesy of GitHub.com
  */
 
-code {
-  font-family: 'Consolas', 'DejaVu Sans Mono', 'Bitstream Vera Sans Mono', monospace;
-  font-size: 14px;
-  color: #f8f8f2;
-  background: #d72222;
+.highlight pre, pre, .highlight .hll {
+ background-color: #373832;
+ border: 1px solid #f8f8f2;
   letter-spacing: 0.015em;
   line-height: 120%;
   padding: 0.5em;
-  
-}
-
-.highlight {
-  color: #f8f8f2;
-  background: #373832;
-  letter-spacing: 0.015em;
-  line-height: 120%;
-  padding: 0.5em;
-  
 }
 
 .highlight code {
