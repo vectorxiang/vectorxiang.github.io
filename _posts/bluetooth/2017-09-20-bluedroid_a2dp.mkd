@@ -436,6 +436,7 @@ static void bta_av_api_register(tBTA_AV_DATA *p_data)
         {
             /* set up the audio stream control block */
             APPL_TRACE_EVENT("AV: set up the audio stream control block ");
+            // 后面的a2dp 相关的处理都会用到 bta_av_a2d_action
             p_scb->p_act_tbl = (const tBTA_AV_ACT *)bta_av_a2d_action;
             p_scb->p_cos     = &bta_av_a2d_cos;
             p_scb->media_type= AVDT_MEDIA_AUDIO;
