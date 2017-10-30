@@ -1,0 +1,136 @@
+---
+layout: post
+title:  "Bluetooth 之 L2CAP"
+date:   2017-10-25
+categories: [bluetooth]
+tags: Bluetooth
+catalog: true
+---
+# 一.概述
+逻辑连接控制和适配协议( the Logical Link Control and Adaptation Layer Protoco),缩写为 L2CAP
+L2CAP通过协议多路复用、分段重组操作和组概念,向高层提供面向连接的和无连接的数据服务,
+L2CAP还屏蔽了低层传输协议中的很多特性，使得高层协议应用开发人员可以不必了解基层协议而进行开发
+L2CAP通过 channel identifier (CID) 来区分每一条逻辑连接， 其中 0x0001 ~ 0x003F 为保留CID :
+
+![](/images/bluetooth/l2cap_cid.png)
+
+不同设备间CID可复用，但本地设备CID不可复用。
+
+# 二.框架图
+
+![](/images/bluetooth/l2cap_architectrue1.png)
+
+
+![](/images/bluetooth/l2cap_architectrue2.png)
+
+
+# 三.Data Format
+
++ A：CONNECTION-ORIENTED CHANNELS in basic L2CAP mode（面向连接，采用基本L2CAP模式）
++ B: CONNECTIONLESS DATA CHANNEL in basic L2CAP mode（无连接的，采用基本L2CAP模式）
++ C：CONNECTION-ORIENTED CHANNELS in RETRANSMISSION/FLOWCONTROL/STREAMING MODES（面向连接，重传/流量控制/流模式）
+
+**情况A**采用Basic information frame (B-frame)，格式如下：
+
+![](/images/bluetooth/l2cap_b-frame.png)
+
+Length参数指的是Information Field的字节数，Information payload 为0到65535字节。
+
+**情况B**采用Group frame (G-frame)，如下：
+
+![](/images/bluetooth/l2cap_g-frame.png)
+
+参数Length为PSM的字节数加上information的字节数，因为是CONNECTIONLESS DATA CHANNEL，所以CID为0x0002。
+PSM为Protocol/Service Multiplexer，PSM至少是16bit，此外有限制条件,必须为以下这种格式：
+|xxxxxxxx0||xxxxxxxx1|。PSM的定义如下：
+
+![](/images/bluetooth/psm.png)
+
+可以看出分为两个range，第一个range是SIG分配的协议代表值，第二个range是动态分配的，用来与SDP通信，还可以用来支持特殊协议。
+Information部分从0 to 65533字节。
+
+**情况C**采用Information frame (I-frame)和Supervisory frame (S-frame)配合使用，先说S-Frame，S-Frame则用于确认I-Frame和I-Frame的重传请求
+
+![](/images/bluetooth/l2cap_s-frame.png)
+
+Length参数为除了basic L2CAP header的总共字节数。
+Control部分对应三种Control mode:
+  1. Standard Control Field ， 用于Retransmission mode and Flow Control mode；
+  2. the Enhanced Control Field ,  用于Enhanced Retransmission mode and Streaming mode；
+  3. Extended Control Field ， 用于Enhanced Retransmission mode and Streaming mode。
+
+这三种 Control mode 对应的 Control 部分格式为 :  
+
+![](/images/bluetooth/l2cap_3.1.png)
+
+![](/images/bluetooth/l2cap_3.2.png)
+
+![](/images/bluetooth/l2cap_3.3.png)
+
+最低位为 “1” 代表 S-Frame ， “0” 代表 I-Frame . 
+SAR：Segmentation and Reassembly，指明该L2CAP是否是分段过的，格式如下：
+
+![](/images/bluetooth/l2cap_3.4.png)
+
+TxSeq：Send Sequence Number，对发送的I-Frame计数，用于分段和重组。
+ReqSeq：Receive Sequence Number，接受序号，用于重传等
+R：Retransmission Disable Bit，用来实现Flow Control.
+S:Supervisory function,表示S-Frame的type,定义如下：
+
+![](/images/bluetooth/l2cap_3.5.png)
+
+P:Poll，The P-bit is set to 1 to solicit a response from the receiver. The receiver shall respond immediately with a frame with the F-bit set to 1.
+F：Final(1 bit)，The F-bit is set to 1 in response to an S-frame with the P bit set to 1.
+
+再来看一下 I-frame ,  其格式如下 : 
+
+![](/images/bluetooth/l2cap_i-frame.png)
+
+Control 及头部和上面的 S-Frame 一样 。
+
+L2CAP SDU Length（2byte)
+如果L2CAP的SDU比较大，跨越了好几个I-Frame，则SDU Length表示总的SDU的长度。如果SDU没有分段的话，这个Field不用。需要注意的是，SDU Length只出现在Start I-Frame中，此时I-Frame的SAR=0x01。也就是说，在所有分段的I-Frame中，只有最开始的那个需要指明SDU Length，其余的I-Frame都不需要。
+
+Information Payload Field
+根据配置的MPS（MAX PUS）大小，可以填充这个Field。
+
+FCS（2byte）
+用来check这个Frame .
+
+# 四. SIGNALING PACKET FORMATS
+
+前面讲了好几种类型的PDU，还有一种C-Frame。C-Frame专用在signaling channel（0x0001或者0x0005）上，signaling commands在上面传输。
+需要注意的是：0x0001通道的一个C-frame可以同时传输多个command，0x0005只能传输一个。payload Length不能超过MTUsig。下图为定义的Minimum Signaling MTU：
+
+![](/images/bluetooth/l2cap_4.1.png)
+
+在signaling channel上定义的L2CAP PDU的格式如下：
+
+![](/images/bluetooth/l2cap_signaling_commands.png)
+
+signaling commands的格式如下：
+
+Code (1 octet)：指定Command的type，一般有以下几种：
+
+![](/images/bluetooth/l2cap_4.2.png)
+
+![](/images/bluetooth/l2cap_4.2_2.png)
+
+参数Identifier (1 octet)：标识一个req和res，ID相匹配。
+参数Length (2 octets)：指明data field字节数。
+参数Data (0 or more octets)：Command数据 , 格式可以查询 Spec Volume 3. Part A .4 
+
+
+# 五.状态机
+
+![](/images/bluetooth/l2cap_state_machine.png)
+
+
+# 六.流程举例
+整个流程
+
+![](/images/bluetooth/l2cap_connect_eg.png)
+
+![](/images/bluetooth/l2cap_disconnect_eg.png)
+
+
