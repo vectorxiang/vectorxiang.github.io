@@ -6,12 +6,6 @@ categories: [bluetooth]
 tags: Bluetooth
 catalog: true
 ---
-根据功能 bluedroid 中 a2dp 主要分为两个部分， 连接控制和数据传输。  
-控制部分用来控制连接断开和其他相关属性， 这部分向上层提供接口 btav_interface_t 。  
-传输部分 bluedroid （system/bt/audio_a2dp_hw）中会编译出  **audio.a2dp.default.so** ， 其中实现了 audio output devices  的两个 interface ：  audio_hw_device 和 audio_stream_out ,  其中会将 data 通过socket 传给 bluedroid .   
-
-先来看 btav_interface_t 中是如何 init bluedroid a2dp 
-
 # 1. init
 ```c
 @ btif_av.c
@@ -463,5 +457,19 @@ static void bta_av_api_register(tBTA_AV_DATA *p_data)
 ```
 这里主要用来初始化 stream control block 即 bta_av_cb.p_scb ， 其中包含 AVDTP END POINT 的信息， 此外在创建 "Advanced Audio" SDP record . 
  
-
- 
+# 3.总结
+自己总结一下开起 BT 时主要做的事情 :
+1. **初始化 btif av 状态机** btif_av_cb[i].sm_handle = btif_av_state_handlers  （此处 i 为支持的支持连接的 a2dp client 数目），初始状态为 idle , 其状态包含 ： 
+```c
+    BTIF_AV_STATE_IDLE = 0x0,
+    BTIF_AV_STATE_OPENING,
+    BTIF_AV_STATE_OPENED,
+    BTIF_AV_STATE_STARTED,
+    BTIF_AV_STATE_CLOSING
+``` 
+2. **创建 a2dp_ctrl socket** (/data/misc/bluedroid/.a2dp_ctrl)  
+3. 设定 **bta av 的 event 处理函数 bta_av_hdl_event** ，bta 层向上层提供的 AV 接口就是向其发送event , 其中将 event 分为3类来处理 , 
++ non state machine events
++ state machine events 
++ stream state machine events
+4. 注册 “Advanced Audio” SDP record , 并填充包含 AVDTP END POINT 的信息  
