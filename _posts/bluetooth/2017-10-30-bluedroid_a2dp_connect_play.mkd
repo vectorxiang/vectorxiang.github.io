@@ -1,0 +1,325 @@
+---
+layout: post
+title:  "Bluetooth 之 bluedroid A2DP Connect"
+date:   2017-10-30
+categories: [bluetooth]
+tags: Bluetooth
+catalog: true
+---
+# 连接流程
+Bluedroid 中 A2DP 对外的接口为 bt_av_sink_interface ， 其中 connet 对应的是 src_connect_sink 
+```c
+static bt_status_t src_connect_sink(bt_bdaddr_t *bd_addr)
+{
+    BTIF_TRACE_EVENT("%s", __FUNCTION__);
+    CHECK_BTAV_INIT();
+
+    return btif_queue_connect(UUID_SERVCLASS_AUDIO_SOURCE, bd_addr, connect_int);
+}
+
+bt_status_t btif_queue_connect(uint16_t uuid, const bt_bdaddr_t *bda, btif_connect_cb_t connect_cb) {
+    connect_node_t node;
+    memset(&node, 0, sizeof(connect_node_t));
+    memcpy(&node.bda, bda, sizeof(bt_bdaddr_t));
+    node.uuid = uuid;
+    node.connect_cb = connect_cb;
+
+    return btif_transfer_context(queue_int_handle_evt, BTIF_QUEUE_CONNECT_EVT,
+                          (char *)&node, sizeof(connect_node_t), NULL);
+```
+可以看到这里调用到 btif_transfer_context 来切换上下文， 实际执行的是 queue_int_handle_evt 来处理 BTIF_QUEUE_CONNECT_EVT ， 最后实际调用的是传进来的 connect_cb 也就是 connect_int  : 
+```c
+static bt_status_t connect_int(bt_bdaddr_t *bd_addr, uint16_t uuid)
+{
+    btif_av_connect_req_t connect_req;
+    int i;
+    connect_req.target_bda = bd_addr;
+    connect_req.uuid = uuid;
+    BTIF_TRACE_EVENT("%s", __FUNCTION__);
+
+    .......
+
+    btif_sm_dispatch(btif_av_cb[i].sm_handle, BTIF_AV_CONNECT_REQ_EVT, (char*)&connect_req);
+
+
+    return BT_STATUS_SUCCESS;
+}
+```
+ 开始进入 btif av 状态机 , 此时处于 idle 状态 ：  
+ ```
+ static BOOLEAN btif_av_state_idle_handler(btif_sm_event_t event, void *p_data, int index)
+{
+    switch (event)
+    {
+        case BTIF_AV_CONNECT_REQ_EVT:
+            /* For outgoing connect stack and app are in sync.
+            */
+            memcpy(&btif_av_cb[index].peer_bda, ((btif_av_connect_req_t*)p_data)->target_bda,
+                                                                        sizeof(bt_bdaddr_t));
+            BTA_AvOpen(btif_av_cb[index].peer_bda.address, btif_av_cb[index].bta_handle,
+                        TRUE, BTA_SEC_NONE, ((btif_av_connect_req_t*)p_data)->uuid);
+            btif_sm_change_state(btif_av_cb[index].sm_handle, BTIF_AV_STATE_OPENING);
+            break;
+ ```
+ 在调用 BTA_AvOpen 之后将状态机切换为 OPENING 状态 ， 在 btif_av_state_opening_handler 的 ENTER_EVT 处理中会调用上层的call back, 传递 BTAV_CONNECTION_STATE_CONNECTING 的消息。 
+ 先继续来追 BTA_AvOpen 
+ ```c
+ void BTA_AvOpen(BD_ADDR bd_addr, tBTA_AV_HNDL handle, BOOLEAN use_rc, tBTA_SEC sec_mask,
+                                                                             UINT16 uuid)
+{
+    tBTA_AV_API_OPEN *p_buf =
+        (tBTA_AV_API_OPEN *)osi_malloc(sizeof(tBTA_AV_API_OPEN));
+
+    p_buf->hdr.event = BTA_AV_API_OPEN_EVT;	//hdr 由 bta 先进行识别分发
+    p_buf->hdr.layer_specific   = handle;
+    bdcpy(p_buf->bd_addr, bd_addr);	//其他的数据由 sybsystem 进一步处理
+    p_buf->use_rc = use_rc;
+    p_buf->sec_mask = sec_mask;
+    p_buf->switch_res = BTA_AV_RS_NONE;
+    p_buf->uuid = uuid;
+
+    bta_sys_sendmsg(p_buf);
+}
+ ```
+ 将消息传给 bta 层来处理 ， 处理的是 btu_bta_msg_ready ， 其中会将 event 拆分出 subsystem id 来分开处理 
+ ```c
+ void bta_sys_event(BT_HDR *p_msg)
+{
+    UINT8       id;
+    BOOLEAN     freebuf = TRUE;
+
+    APPL_TRACE_EVENT("BTA got event 0x%x", p_msg->event);
+
+    /* 获取到   subsystem id */
+    id = (UINT8) (p_msg->event >> 8);
+
+    /* verify id and call subsystem event handler */
+    if ((id < BTA_ID_MAX) && (bta_sys_cb.reg[id] != NULL))
+    {
+    	// 这里 bta 层 av 的 reg 为 bta_av_reg
+        freebuf = (*bta_sys_cb.reg[id]->evt_hdlr)(p_msg);
+    }
+    ......
+}
+ ```
+ 再来看 bta_av_reg.evt_hdlr 也就是 bta_av_hdl_event ， 另外注意到这里有一个机构体转换的地方， 传下来的是一个  tBTA_AV_API_OPEN 指针， 而到 bta_sys_event 已经转换为一个 BT_HDR 指针 
+ ```c
+ typedef struct
+{
+    uint16_t          event;
+    uint16_t          len;
+    uint16_t          offset;
+    uint16_t          layer_specific;
+    uint8_t           data[];
+} BT_HDR;
+
+typedef struct
+{
+    BT_HDR              hdr;
+    BD_ADDR             bd_addr;
+    BOOLEAN             use_rc;
+    tBTA_SEC            sec_mask;
+    tBTA_AV_RS_RES      switch_res;
+    UINT16              uuid;  /* uuid of initiator */
+} tBTA_AV_API_OPEN;
+ ```
+ 可以看到 tBTA_AV_API_OPEN 结构体中第一个成员变量就是一个 BT_HDR ， 这样在 bta 层解析时只需解析其中的内容即可， 其他传给 bta 的消息类似都有这样的结构 。 回来在看  bta_av_hdl_event  对传下来的 BTA_AV_API_OPEN_EVT 消息的处理， bta_av_hdl_event 中将消息分为 3类来处理， BTA_AV_API_OPEN_EVT 属于 AV stream state event : 
+ ```c
+ BOOLEAN bta_av_hdl_event(BT_HDR *p_msg)
+{
+    UINT16 event = p_msg->event;
+
+    ......
+    else
+    {
+        APPL_TRACE_VERBOSE("handle=0x%x", p_msg->layer_specific);
+        /* stream state machine events */
+        bta_av_ssm_execute( bta_av_hndl_to_scb(p_msg->layer_specific),
+                                p_msg->event, (tBTA_AV_DATA *) p_msg);
+    }
+    return TRUE;
+}
+```
+这里可以看到传下去的指针类型又变为了 tBTA_AV_DATA 
+```c
+typedef union
+{
+    BT_HDR                  hdr;
+    tBTA_AV_API_ENABLE      api_enable;
+    tBTA_AV_API_REG         api_reg;
+    tBTA_AV_API_OPEN        api_open;
+    ......
+    tBTA_AV_MAX_CLIENT      max_av_clients;
+} tBTA_AV_DATA;
+```
+这样下面又可以获取到完整的数据， 继续来看 AV stream state event 的处理  
+```c
+/* AV stream state event 都会在这里处理 */
+void bta_av_ssm_execute(tBTA_AV_SCB *p_scb, UINT16 event, tBTA_AV_DATA *p_data)
+{
+    tBTA_AV_SST_TBL     state_table;
+    UINT8               action;
+    int                 i, xx;
+
+    ......
+            APPL_TRACE_IMP("AV Sevent(0x%x)=0x%x(%s) state=%d(%s)",
+               p_scb->hndl, event, bta_av_evt_code(event), p_scb->state, bta_av_sst_code(p_scb->state));
+
+    /* look up the state table for the current state */
+    state_table = bta_av_sst_tbl[p_scb->state];
+
+    //将 event 转换成 Stream State Machine Event 的event id
+    event -= BTA_AV_FIRST_SSM_EVT;
+
+    ......
+
+    /* 切换状态到 state_table[event] 的第3个元素 */
+    p_scb->state = state_table[event][BTA_AV_SNEXT_STATE];
+
+    //  BTA_AV_SACTIONS 为 2 
+    for(i=0; i< BTA_AV_SACTIONS; i++)
+    {
+        if ((action = state_table[event][i]) != BTA_AV_SIGNORE)
+        {
+            (*p_scb->p_act_tbl[action])(p_scb, p_data);
+        }
+        else
+            break;
+    }
+
+}
+ ```
+ 这里首先根据当前 p_scb (开BT时 bta_av_api_register 中创建的) 的state ， 来找到当前 event 的处理表， 例如当前处于 INIT  
+ ```c
+ enum
+{
+    BTA_AV_INIT_SST,
+    BTA_AV_INCOMING_SST,
+    BTA_AV_OPENING_SST,
+    BTA_AV_OPEN_SST,
+    BTA_AV_RCFG_SST,
+    BTA_AV_CLOSING_SST
+};
+
+static const tBTA_AV_SST_TBL bta_av_sst_tbl[] =
+{
+    bta_av_sst_init,
+    bta_av_sst_incoming,
+    bta_av_sst_opening,
+    bta_av_sst_open,
+    bta_av_sst_rcfg,
+    bta_av_sst_closing
+};
+
+// INIT 对应的 state table 为
+static const UINT8 bta_av_sst_init[][BTA_AV_NUM_COLS] =
+{
+/* Event                     Action 1               Action 2               Next state */
+/* AP_OPEN_EVT */           {BTA_AV_DO_DISC,        BTA_AV_SIGNORE,        BTA_AV_OPENING_SST },
+/* AP_CLOSE_EVT */          {BTA_AV_CLEANUP,        BTA_AV_SIGNORE,        BTA_AV_INIT_SST },
+/* AP_START_EVT */          {BTA_AV_SIGNORE,        BTA_AV_SIGNORE,        BTA_AV_INIT_SST },
+......
+}
+ ```
+ 按照上面code 的逻辑是，找到对应event 的一行的前两个成员变量， 执行 p_scb->p_act_tbl 也就是 bta_av_a2d_action[] 对应的函数， 如 state table 中为 BTA_AV_SIGNORE 则不执行 break , 此外将 control block 的 state 设为 第三个元素， 即 ：
+ ```c
+/* ssm action functions for audio stream */
+const tBTA_AV_SACT bta_av_a2d_action[] =
+{
+    bta_av_do_disc_a2d,     /* BTA_AV_DO_DISC  */
+    ......
+ ```
+ 所以这里只需执行 bta_av_do_disc_a2d , 并将p_scb->state 状态转为 BTA_AV_OPENING_SST . 
+ ```c
+ void bta_av_do_disc_a2d (tBTA_AV_SCB *p_scb, tBTA_AV_DATA *p_data)
+{
+    UINT16              attr_list[] = {ATTR_ID_SERVICE_CLASS_ID_LIST,
+                                       ATTR_ID_PROTOCOL_DESC_LIST,
+                                       ATTR_ID_BT_PROFILE_DESC_LIST};
+    ......
+    
+    // 当为remote 发起连接时 skip_sdp 为true ， 处于为 DUT 主动连接为 false
+    if (p_scb->skip_sdp == TRUE)
+    {
+        ......
+        return;
+    }
+    else
+    {
+        /* only one A2D find service is active at a time */
+        bta_av_cb.handle = p_scb->hndl;
+
+        /* set up parameters */
+        db_params.db_len = BTA_AV_DISC_BUF_SIZE;
+        db_params.num_attr = 3;
+        db_params.p_attrs = attr_list;
+        p_scb->uuid_int = p_data->api_open.uuid;
+        p_scb->sdp_discovery_started = TRUE;
+        if (p_scb->uuid_int == UUID_SERVCLASS_AUDIO_SINK)
+            sdp_uuid = UUID_SERVCLASS_AUDIO_SOURCE;
+        else if (p_scb->uuid_int == UUID_SERVCLASS_AUDIO_SOURCE)
+            sdp_uuid = UUID_SERVCLASS_AUDIO_SINK;	
+            
+        // 实际打印log :  uuid_int 0x110a, Doing SDP For 0x110b 
+        APPL_TRACE_DEBUG("%s: uuid_int 0x%x, Doing SDP For 0x%x", __func__,
+                    p_scb->uuid_int, sdp_uuid);
+        if (A2D_FindService(sdp_uuid, p_scb->peer_addr, &db_params,
+                    bta_av_a2d_sdp_cback) == A2D_SUCCESS)
+            return;
+
+        /* 代码走到这里代表 SDP fail */
+        bta_av_a2d_sdp_cback(FALSE, NULL);
+    }
+}	
+ ```
+ 接下来开始进行 SDP ,  另外上面也设定了 SDP 的 call back 为 bta_av_a2d_sdp_cback     
+ 
+ ![](/images/bluetooth/a2dp_sdp.png)
+ 
+ 再来看 call back 函数  
+ ```c
+ static void bta_av_a2d_sdp_cback(BOOLEAN found, tA2D_Service *p_service)
+{
+    tBTA_AV_SCB *p_scb = bta_av_hndl_to_scb(bta_av_cb.handle);
+
+    if (p_scb == NULL) {
+        APPL_TRACE_ERROR("%s, no scb found for handle(0x%x)", __func__,
+                         bta_av_cb.handle);
+        return;
+    }
+
+    tBTA_AV_SDP_RES *p_msg =
+        (tBTA_AV_SDP_RES *)osi_malloc(sizeof(tBTA_AV_SDP_RES));
+    // SDP 正常时此次的 event 应为 BTA_AV_SDP_DISC_OK_EVT
+    p_msg->hdr.event = (found) ?
+        BTA_AV_SDP_DISC_OK_EVT : BTA_AV_SDP_DISC_FAIL_EVT;
+    if (found && (p_service != NULL))
+        p_scb->avdt_version = p_service->avdt_version;
+    else
+        p_scb->avdt_version = 0x00;
+    p_msg->hdr.layer_specific = bta_av_cb.handle;
+
+    bta_sys_sendmsg(p_msg);
+    ......
+}
+ ```
+ 后面的流程和前面基本类似， 这里不再详细的追了， 列出关键log : 
+ 
+	10-30 17:39:19.482  2132  2659 D bt_btif : AV Sevent(0x41)=0x1209(API_OPEN) state=0(INIT)
+	10-30 17:39:22.309  2132  2659 D bt_btif : AV Sevent(0x41)=0x1214(SDP_DISC_OK) state=2(OPENING)
+	10-30 17:39:22.369  2132  2659 D bt_btif : AV Sevent(0x41)=0x1226(AVDT_CONNECT) state=2(OPENING)
+	10-30 17:39:22.432  2132  2659 D bt_btif : AV Sevent(0x41)=0x1216(STR_DISC_OK) state=2(OPENING)
+	10-30 17:39:22.441  2132  2659 D bt_btif : AV Sevent(0x41)=0x1218(STR_GETCAP_OK) state=2(OPENING)
+	10-30 17:39:22.452  2132  2659 D bt_btif : AV Sevent(0x41)=0x1218(STR_GETCAP_OK) state=2(OPENING)
+	10-30 17:39:22.514  2132  2659 D bt_btif : AV Sevent(0x41)=0x121a(STR_OPEN_OK) state=2(OPENING)
+
+ SDP 之后 的 AVDTP Signaling log 如下 :
+ 
+  ![](/images/bluetooth/a2dp_avdtp_siganling.png)
+  
+# 总结
+这里主要追踪DUT主动连接的流程 
++ 1. 发起 SDP request ， 获取 remote "Audio Sink" 的相关参数
++ 2. AVDTP 连接
++ 3. 获取 remote supported End Point 及 相关参数
++ 4. 配置并打开合适的 End point
