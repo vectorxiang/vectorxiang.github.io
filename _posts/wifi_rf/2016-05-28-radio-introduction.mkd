@@ -1,12 +1,9 @@
 ---
 layout: post
 title: "无线电原理简介"
-description:
+category: RF相关
 category: wifi
 tags: [rf]
-mathjax: 
-chart:
-comments: false
 ---
 无线电波是电磁波，电磁波是由变化的电场或变化的磁场产生的搜索，变化的电场和变化的磁场可以由简谐电流产生。    
 ![](/images/network/radio_introduction_1.gif)    
