@@ -317,9 +317,11 @@ const tBTA_AV_SACT bta_av_a2d_action[] =
  
   ![](/images/bluetooth/a2dp_avdtp_siganling.png)
   
+到这里 A2DP 的连接流程已经完成， btif 层会收到  BTA_AV_OPEN_EVT 消息， btif av state 切换到 open , 并调用上层的 CBACK 通知状态变化 , 上层 A2dpStateMachine 中会切换状态为 Connected 并通知 Audio 状态变化， 这里 Audio 在收到 A2DP connected 的消息之后会去连接 A2DP 开启是建立的 a2dp_ctrl socket (/data/misc/bluedroid/.a2dp_ctrl) ， 后续的 audio 指令会通过这个 socket 传给 bluedroid 来处理。 
+  
 # 总结
 这里主要追踪DUT主动连接的流程 
-+ 1. 发起 SDP request ， 获取 remote "Audio Sink" 的相关参数
-+ 2. AVDTP 连接
-+ 3. 获取 remote supported End Point 及 相关参数
-+ 4. 配置并打开合适的 End point
+1. 发起 SDP request ， 获取 remote "Audio Sink" 的相关参数
+2. AVDTP 连接
+3. 获取 remote supported End Point 及 相关参数
+4. 配置并打开合适的 End point
