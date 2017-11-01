@@ -3,6 +3,7 @@ layout: post
 title:  "Android M bluetooth update & 新消息处理机制"
 date:   2015-11-6
 categories: [bluetooth]
+catalog: true
 ---   
 新支持的profile : SAP(SIM access profile)   
 
