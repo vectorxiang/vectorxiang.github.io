@@ -1,6 +1,6 @@
 ---
 layout: post
-title: "wifi bettery"
+title: "BatteryStatsService 及 WIFI 耗电计算"
 description:
 category: wifi
 tags: [network, android , wifi]
@@ -8,8 +8,124 @@ mathjax:
 chart:
 comments: false
 ---
+以下内容参考 **Android N**
+
+# 电量记录
+Android 中电池电量统计由 BatteryStatsService 来记录， BatteryStatsService 在开机时由 ActivityManagerService 启动。
+
+在Android系统中，手机的电压是一定的，所以手机的电量计算就是模块使用时间*模块耗电。模块的耗电会根据模块的每个状态会有一个固定的预估值， 所以这里主要是统计各模块的使用时间。 其工作原理是由各个模块在状态变化时通知 BatteryStatsService ， 然后BatteryStatsService 来记录各个模块各种状态下的时间 
+
+![](/images/network/BatteryStatsService_note.png)
+
+在 WifiStateMachine 的构造函数中会获得 BatteryStatsService 的代理 
+```c
+    public WifiStateMachine(Context context, FrameworkFacade facade, Looper looper,
+                            UserManager userManager, WifiInjector wifiInjector,
+                            BackupManagerProxy backupManagerProxy,
+                            WifiCountryCode countryCode) {
+        ......
+        mBatteryStats = IBatteryStats.Stub.asInterface(mFacade.getService(
+                BatteryStats.SERVICE_NAME));                            
+```
+BatteryStatsService 针对每个模块提供了一系列的 noteXXX 这样的接口给模块来调用， 以下列出部分给 wifi 的接口  
+```java
+// 通知 WIFI 状态开启/关闭
+public void noteWifiOn()
+public void noteWifiOff()
+
+// 通知 wifi driver 加载/卸载
+public void noteWifiRunning(WorkSource ws)
+public void noteWifiRunningChanged(WorkSource oldWs, WorkSource newWs)
+public void noteWifiStopped(WorkSource ws)
+
+public void noteWifiState(int wifiState, String accessPoint)
+
+public void noteWifiSupplicantStateChanged(int supplState, boolean failedAuth)
+
+public void noteWifiRssiChanged(int newRssi)
+
+public void noteFullWifiLockAcquired(int uid)
+public void noteFullWifiLockReleased(int uid)
+
+// 没有看到调用的位置
+public void noteWifiScanStarted(int uid)
+public void noteWifiScanStopped(int uid)
+
+public void noteWifiMulticastEnabled(int uid)
+public void noteWifiMulticastDisabled(int uid)
+
+public void noteFullWifiLockAcquiredFromSource(WorkSource ws)
+public void noteFullWifiLockReleasedFromSource(WorkSource ws)
+
+// wifi 模块使用的接口
+public void noteWifiScanStartedFromSource(WorkSource ws)
+public void noteWifiScanStoppedFromSource(WorkSource ws)
+
+public void noteWifiBatchedScanStartedFromSource(WorkSource ws, int csph)
+public void noteWifiBatchedScanStoppedFromSource(WorkSource ws)
+
+public void noteWifiMulticastEnabledFromSource(WorkSource ws)
+public void noteWifiMulticastDisabledFromSource(WorkSource ws)
+```
+以 noteWifiOn 和 noteWifiOff 为例来看一下 BatteryStatsService 是怎样实现的 : 
+```java
+@ frameworks/base/services/core/java/com/android/server/am/BatteryStatsService.java
+
+    public void noteWifiOn() {
+        enforceCallingPermission();
+        synchronized (mStats) {
+            mStats.noteWifiOnLocked();
+        }
+    }
+    
+@ frameworks/base/core/java/com/android/internal/os/BatteryStatsImpl.java
+
+    public void noteWifiOnLocked() {
+        if (!mWifiOn) {
+            // 获取开机之后系统运行的时间，包含深度睡眠
+            final long elapsedRealtime = mClocks.elapsedRealtime();
+            // 获取开机之后系统运行的时间，不包含深度睡眠
+            final long uptime = mClocks.uptimeMillis();
+            // 第28位记录 wifi on/off 状态
+            mHistoryCur.states2 |= HistoryItem.STATE2_WIFI_ON_FLAG;
+            if (DEBUG_HISTORY) Slog.v(TAG, "WIFI on to: "
+                    + Integer.toHexString(mHistoryCur.states));
+            addHistoryRecordLocked(elapsedRealtime, uptime);
+            mWifiOn = true;
+            // Wifi On Timer 开始计时
+            mWifiOnTimer.startRunningLocked(elapsedRealtime);
+            scheduleSyncExternalStatsLocked("wifi-off", ExternalStatsSync.UPDATE_WIFI);
+        }
+    }
+```
+相应的在调用 noteWifiOff 时会调用 mWifiOnTimer.stopRunningLocked(elapsedRealtime) , 这样 mWifiOnTimer 中就会包含 WIFI on 的总时间。
+
+而实际上 Android 系统中即使不去 enable WIFI， 在开启 Wi-Fi Scanning 之后 driver 也会加载，上层也可以启用 wifi 的扫描功能， 所以还有一个 WifiRunning 的计时， 最后在 BatteryStatsImpl 中由  mGlobalWifiRunning 来记录 。
+
+此外 wifi 的扫描会比较频繁， wifi 模块调用 noteWifiScanStartedFromSource/noteWifiScanStoppedFromSource 来通知扫描的开始结束， BatteryStatsImpl 中实际执行的是 noteWifiScanStarted(Stoped)Locked ,其中会记录每个 UID 的扫描状态
+```java
+    public void noteWifiScanStartedLocked(int uid) {
+        uid = mapUid(uid);
+        final long elapsedRealtime = mClocks.elapsedRealtime();
+        ......
+        getUidStatsLocked(uid).noteWifiScanStartedLocked(elapsedRealtime);
+    }
+```
+
+相比 Android M 在 N 中会多一个 noteWifiBatchedScanStartedFromSource 的接口， 具体没有搜到调用的地方， 目前不知道这里的意思。
+
+# 电量计算
+Android中计算耗电量离不开BatteryStatsHelper这个类，它主要用于计算所有应用和服务的用电量。 
+在Settings设置中显示电量相关信息，就是通过调用BatteryStatsHelper的接口来实现的。
+```java
+@ frameworks/base/core/java/com/android/internal/os/BatteryStatsHelper.java
+
+mWifiPowerCalculator.calculateApp(app, u, mRawRealtimeUs, mRawUptimeUs, mStatsType);
+```
 
 ```c
+@ frameworks/base/core/java/com/android/internal/os/WifiPowerCalculator.java
+
     public void calculateApp(BatterySipper app, BatteryStats.Uid u, long rawRealtimeUs,
                              long rawUptimeUs, int statsType) {
         app.wifiRxPackets = u.getNetworkActivityPackets(BatteryStats.NETWORK_WIFI_RX_DATA,
@@ -48,35 +164,6 @@ comments: false
         }
     }
 ```
-其中 mWifiPowerPerPacket ， mWifiPowerOn ， mWifiPowerScan ， mWifiPowerScan 都是从 power_profile.xml读取的各个器件的电源消耗参数。
+其中 mWifiPowerPerPacket ， mWifiPowerOn ， mWifiPowerScan ， mWifiPowerScan 都是从 power_profile.xml读取的各个器件的电源消耗预估参数。
 
-所以只需要看一下时间的计算，先来追一下 wifiRunningTimeMs ：
-```c
-        public long getWifiRunningTime(long elapsedRealtimeUs, int which) {
-            if (mWifiRunningTimer == null) {
-                return 0;
-            }
-            return mWifiRunningTimer.getTotalTimeLocked(elapsedRealtimeUs, which);
-        }
-```
-所以只需要在最追一下 mWifiRunningTimer 的设定
 
-```c
-        public void noteWifiRunningLocked(long elapsedRealtimeMs) {
-            if (!mWifiRunning) {
-                mWifiRunning = true;
-                if (mWifiRunningTimer == null) {
-                    mWifiRunningTimer = new StopwatchTimer(Uid.this, WIFI_RUNNING,
-                            mWifiRunningTimers, mOnBatteryTimeBase);
-                }
-                mWifiRunningTimer.startRunningLocked(elapsedRealtimeMs);
-            }
-        }
-
-        public void noteWifiStoppedLocked(long elapsedRealtimeMs) {
-            if (mWifiRunning) {
-                mWifiRunning = false;
-                mWifiRunningTimer.stopRunningLocked(elapsedRealtimeMs);
-            }
-        }
-```
