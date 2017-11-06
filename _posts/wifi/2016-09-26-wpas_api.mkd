@@ -1,12 +1,9 @@
 ---
 layout: post
-title: "WPAS API"
+title: "wpa_supplicant 接口及其应用"
 description:
 category: wifi
 tags: [network, android , wifi]
-mathjax: 
-chart:
-comments: false
 ---
 在Android 平台中 WifiService 和 wpa_cli 都是 WAPS 的客户端， 他们在和 WPAS 交互时都会用到 wpa_supplicant 提供的接口。 这些接口全部声明在 wpa_ctrl.h 中，使用之前需要链接 libwpa_client.so 动态库, 另外需包含 wpa_ctrl.h 头文件。     
 
@@ -15,23 +12,90 @@ LOCAL_SHARED_LIBRARIES += libwpa_client
 ```
 ```c
 #include "libwpa_client/wpa_ctrl.h"
+
+// 连接 wpas , wpa_ctrl_open 等同于 wpa_ctrl_open2(ctrl_path, NULL)
+struct wpa_ctrl * wpa_ctrl_open(const char *ctrl_path);
+struct wpa_ctrl * wpa_ctrl_open2(const char *ctrl_path, const char *cli_path);
+
+// 断开连接
+void wpa_ctrl_close(struct wpa_ctrl *ctrl);
+
+// 向 wpas 发送 command ，请求的事件通过 reply 返回
+int wpa_ctrl_request(struct wpa_ctrl *ctrl, const char *cmd, size_t cmd_len,
+		     char *reply, size_t *reply_len,
+		     void (*msg_cb)(char *msg, size_t len));
+
+// 设置接收 wpas unsolicited event
+int wpa_ctrl_attach(struct wpa_ctrl *ctrl);
+int wpa_ctrl_detach(struct wpa_ctrl *ctrl);
+
+int wpa_ctrl_recv(struct wpa_ctrl *ctrl, char *reply, size_t *reply_len);
+
+int wpa_ctrl_pending(struct wpa_ctrl *ctrl);
+
+int wpa_ctrl_get_fd(struct wpa_ctrl *ctrl);
 ```
       
-客户端使用wpa_ctrl时首先要分配控制对象。下面两个API用于创建和销毁控制对象wpa_ctrl, 其中 ctrl_path 在Android平台上代表 unix域socket的位置。
+客户端使用wpa_ctrl时首先要连接 wpa_supplicant 获取到控制对象。
+WPAS 回报的事件有两种:    
+solicited event(有请求的事件)， 会通过 wpa_ctrl_request 的 reply 参数返回 ； 
+另一种是 unsolicited event(未请求的事件)，在某些过程中 WPAS 可能会回报一些 unsolicited event， 而这些 unsolicited event 会在 wpa_ctrl_request 的 msg_cb 中处理， 但这些事件默认是不会监听的，需先调用  wpa_ctrl_attach 来设置监听。
 
+以下以 wpa_cli 为例 : 
 ```c
-struct wpa_ctrl * wpa_ctrl_open(const char *ctrl_path);
+static int wpa_cli_open_connection(const char *ifname, int attach)
+{
+	// 创建发送 command 的连接 , Android 中 cfile 为 /data/misc/wifi/sockets
+	ctrl_conn = wpa_ctrl_open2(cfile, client_socket_dir);
 
-void wpa_ctrl_close(struct wpa_ctrl *ctrl); 
+	// 创建监听 unsolicited event 的连接
+	if (attach && interactive)
+		mon_conn = wpa_ctrl_open2(cfile, client_socket_dir);
+	else
+		mon_conn = NULL;
+
+	if (mon_conn) {
+		// 设置监听 unsolicited event
+		if (wpa_ctrl_attach(mon_conn) == 0) {
+			wpa_cli_attached = 1;
+			......
+		} 
+	}
+	return 0;
+}
 ```
-在获取到控制 wpa_ctrl 之后就可以给 WPAS 下 command ,其中 msg_cb是一个回调函数，该参数的设置和wpa_supplicant中C/S通信机制的设计有关。 
-
+下面再来看一下是如何向 wpas 发送 command ： 
 ```c
-int wpa_ctrl_request(struct wpa_ctrl *ctrl, const char *cmd, size_t cmd_len,  
-             char *reply, size_t *reply_len,  
-             void (*msg_cb)(char *msg, size_t len)); 
+static int _wpa_ctrl_command(struct wpa_ctrl *ctrl, char *cmd, int print)
+{
+	char buf[4096];
+	size_t len;
+	int ret;
+
+	if (ifname_prefix) {
+		os_snprintf(buf, sizeof(buf), "IFNAME=%s %s",
+			    ifname_prefix, cmd);
+		buf[sizeof(buf) - 1] = '\0';
+		cmd = buf;
+	}
+	len = sizeof(buf) - 1;
+	ret = wpa_ctrl_request(ctrl, cmd, os_strlen(cmd), buf, &len,
+			       wpa_cli_msg_cb);
+	
+	if (print) {
+		buf[len] = '\0';
+		// buf 中会包含 solicited event
+		printf("%s", buf);
+		if (interactive && len > 0 && buf[len - 1] != '\n')
+			printf("\n");
+	}
+	return 0;
+}
 ```
-WPAS 回报的事件有两种: solicited event(有请求的事件)， 会通过上面的 reply 参数返回， 还有一种是 unsolicited event(未请求的事件)，在某些过程中 WPAS 可能会回报一些unsolicited event， 而这些 unsolicited event 会在上面的 msg_cb 中处理， 但这些事件默认是不会监听的，需使用下面两个函数来开启和关闭监听。
+这里的 cmd 为需要执行的 command , 例如 "scan" , "scan_results" 等， 相对应的 buf 中会被写入 command 的执行结果， 例如 "scan" 成功则直接返回 "OK" , 而 "scan_results" 会返回搜索到的 bssid 及信息。 
+
+
+再来看一下 unsolicited event 的监听 ， 以下两个API用于 开启和关闭 unsolicited event 的监听： 
 
 ```c
 int wpa_ctrl_attach(struct wpa_ctrl *ctrl); 
@@ -42,57 +106,29 @@ int wpa_ctrl_detach(struct wpa_ctrl *ctrl);
 ```c
 int wpa_ctrl_recv(struct wpa_ctrl *ctrl, char *reply, size_t *reply_len);  
 ```
-为了在操作上的便利，客户端会创建两个 wpa_ctrl，一个打开通知事件监听仅通过 wpa_ctrl_recv 来接收通知事件， 另一个 wap_ctrl 不会调用attach函数专门用于发送命令和接收回复。   
-
-下面来看一下 wifiservice 中是怎么使用这几个API的     
-
+同样来看 wpa_cli 的代码 :
 ```c
-int wifi_connect_on_socket_path(const char *path)
+static void wpa_cli_recv_pending(struct wpa_ctrl *ctrl, int action_monitor)
 {
-    /* Make sure supplicant is running */
-    ......
-
-    //创建一个 wpa_ctrl 对象，用于发送命令
-    ctrl_conn = wpa_ctrl_open(path);
-    
-    //创建第二个 wpa_ctrl 对象，用于接收 unsolicited event
-    monitor_conn = wpa_ctrl_open(path);
-    
-    //需 attach 才能启用接收 unsolicited event 接收功能
-    if (wpa_ctrl_attach(monitor_conn) != 0) {
-        ......
-        return -1;
-    }
-
-    if (socketpair(AF_UNIX, SOCK_STREAM, 0, exit_sockets) == -1) {
-        ......
-        return -1;
-    }
-
-    return 0;
+	if (ctrl_conn == NULL) {
+		wpa_cli_reconnect();
+		return;
+	}
+	// 检测是否有可读事件，否则阻塞
+	while (wpa_ctrl_pending(ctrl) > 0) {
+		char buf[4096];
+		size_t len = sizeof(buf) - 1;
+		if (wpa_ctrl_recv(ctrl, buf, &len) == 0) {
+			// buf 中为 wpas 出来的 event
+			buf[len] = '\0';
+			......
+			}
+		} else {
+			printf("Could not read pending message.\n");
+			break;
+		}
+	}
+	......
 }
 ```
-
-```c
-int wifi_send_command(const char *cmd, char *reply, size_t *reply_len)
-{
-    int ret;
-    if (ctrl_conn == NULL) {
-        ALOGV("Not connected to wpa_supplicant - \"%s\" command dropped.\n", cmd);
-        return -1;
-    }
-    ret = wpa_ctrl_request(ctrl_conn, cmd, strlen(cmd), reply, reply_len, NULL);
-    if (ret == -2) {
-        ALOGD("'%s' command timed out.\n", cmd);
-        /* unblocks the monitor receive socket for termination */
-        TEMP_FAILURE_RETRY(write(exit_sockets[0], "T", 1));
-        return -2;
-    } else if (ret < 0 || strncmp(reply, "FAIL", 4) == 0) {
-        return -1;
-    }
-    if (strncmp(cmd, "PING", 4) == 0) {
-        reply[*reply_len] = '\0';
-    }
-    return 0;
-```
-没有特别指定事件处理函数， 后面处理了一下timeout 以及 fail 的状况。
+ 

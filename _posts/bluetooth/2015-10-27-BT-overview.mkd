@@ -35,13 +35,13 @@ catalog: true
 # BASEBAND SPECIFICATION 
 
 ## 1. 时钟
-蓝牙的时钟为<font color=red>3.2kHz</font>。就使用的时钟而言，master就是使用的它的native的时钟，而slave则是在它的native时钟上加上对应的offset得到和master同步的时钟。这个offset是在inquiry过程中交互得到的。为了防止时钟的偏移，slave在每次收到master的packet的时候都需要刷新offset。
+蓝牙的时钟为**3.2kHz**。就使用的时钟而言，master就是使用的它的native的时钟，而slave则是在它的native时钟上加上对应的offset得到和master同步的时钟。这个offset是在inquiry过程中交互得到的。为了防止时钟的偏移，slave在每次收到master的packet的时候都需要刷新offset。
 
 ![bt_clock](/images/bluetooth/bt_clock.png)
 
 ## 2. 蓝牙设备地址
-每一个蓝牙设备都会被分配唯一一个48位bt_addr，该地址的结构如下图，其中分为LAP(24位地址低端部分)、UAP(8位地址高端部分)和NAP(16位无意义地址部分)。<font color=red>其中,NAP和UAP是生产厂商的唯一标识码，必须由蓝牙权威部门分配给不同的厂商</font>，而LAP是由厂商内部自由分配。
->其中NAP和UAP可以在[IEEE](http://standards-oui.ieee.org/oui.txt)查询到
+每一个蓝牙设备都会被分配唯一一个48位bt_addr，该地址的结构如下图，其中分为LAP(24位地址低端部分)、UAP(8位地址高端部分)和NAP(16位无意义地址部分)。**其中,NAP和UAP是生产厂商的唯一标识码，必须由蓝牙权威部门分配给不同的厂商**，而LAP是由厂商内部自由分配。
+>其中NAP和UAP可以在 [IEEE](http://standards-oui.ieee.org/oui.txt) 查询到
 
 ![bt_addr](/images/bluetooth/bt_addr.png)
 
@@ -56,6 +56,7 @@ Physical Channel是piconet区分的标准，它是蓝牙系统结构层次中的
 
 在已连接设备的通信中，会把通道分为以625μs为单位的时间长度（slot），每个slot 会被标记为0到2<sup>27</sup>-1，总共2<sup>27</sup>为一个cycle。使用的是TDD的策略进行传输，可以理解为TX和RX是时分双工的。需要注意的是packet的开始和slot的开始需要是对齐的。从目前的packet type来看，最长会占用5个time slot。多packet的slot传输情况见下图。其中k为时间，f(k)为时间k时的频率。
 ![bt_rf_slot](/images/bluetooth/bt_rf_slot.png)
+
 从目前来看，各种packet type所占的slot只有三种，分别占1,3,5个slot，暂未有偶数个的slot的packet出现。另外，需要注意的是master的tx需要在奇数个的slot开始，rx必须在偶数个的slot开始。也就是说 master 使用偶数 slot 传输，slave 使用奇数 slot 传输。
 
 inquiry 和 page scan channel 与上面最大的不同之处在于为了更好地利用时间，他不是625μs才发送一次，而是在625μs中发送了两次，也就是312.5μs发送一次，这也是蓝牙clk最小的时间间隔了。于是从master的角度来看，我们可以看到的内容就如下图所示了。
@@ -77,42 +78,47 @@ inquiry 和 page scan channel 与上面最大的不同之处在于为了更好�
 数据包的格式根据 base rate 和 enhanced data rate 又有不同。
 **Basic Rate：**
 ![bt_br_packet](/images/bluetooth/bt_br_packet.png)   
-<font color=orange>ACCESS CODE</font> : 长度是68或者72bit，当HEADER域没有的话就是68，否则就是正常的72bit。他是用来同步和DC偏移补偿的。更通俗地来讲他是同一个piconet上的标志，也就是一个piconet上（即同一个物理通道上）传输的packet的ACCESS CODE是相同的。其中Access Code又分为3种 :
+**ACCESS CODE** : 长度是68或者72bit，当HEADER域没有的话就是68，否则就是正常的72bit。他是用来同步和DC偏移补偿的。更通俗地来讲他是同一个piconet上的标志，也就是一个piconet上（即同一个物理通道上）传输的packet的ACCESS CODE是相同的。其中Access Code又分为3种 :
 
 ![bt_access_code](/images/bluetooth/bt_access_code.jpg)
 
-<font color=orange>HEADER </font>: 包含用于链路控制的信息   
-<font color=orange>PAYLOAD </font>: 就是信息内容，他的大小最大是2745bit。
+**HEADER**  : 包含用于链路控制的信息   
+**PAYLOAD** : 就是信息内容，他的大小最大是2745bit。
 
 总得来说，一个Basic Rate的packet可以由上面三者的以下组合组成：  
-1)ACCESS CODE;2)ACCESS COED + HEADER; 3)ACCESS CODE + HEADER + PAYLOAD;
+1)ACCESS CODE;   
+2)ACCESS COED + HEADER;    
+3)ACCESS CODE + HEADER + PAYLOAD;    
 
 **Enhanced Data Rate ：**
 ![](/images/bluetooth/bt_edr_packet.png)
-这里的ACCESS CODE和HEADER是和Basic Rate一样的。事实上，我们可以理解为后面的都是payload的部分，只不过在payload部分，我们强制使用了一些头和尾的内容。   
-<font color=orange>Guard</font>：保护间隔，它要来表示HEADER的结尾到SYNC开始之间的时间。范围是4.75μs到5.25μs。   
-<font color=orange>Sync</font>：同步序列，DPSK使用的同步序列。   
-<font color=orange>Enhanced data rate payload</font>：对应的负载。    
-<font color=orange>Trailer</font>：payload的尾，其实他们都是0，对π/4 DQPSK调制而言是0000，对8DPSK的调制而言是000,000.   
+这里的ACCESS CODE和HEADER是和Basic Rate一样的。事实上，我们可以理解为后面的都是payload的部分，只不过在payload部分，我们强制使用了一些头和尾的内容。  
+ 
+**Guard** ：保护间隔，它要来表示HEADER的结尾到SYNC开始之间的时间。范围是4.75μs到5.25μs。   
+**Sync** ：同步序列，DPSK使用的同步序列。   
+**Enhanced data rate payload** ：对应的负载。    
+**Trailer** ：payload的尾，其实他们都是0，对π/4 DQPSK调制而言是0000，对8DPSK的调制而言是000,000.   
 
 下面再来看一下Header 的结构：
 ![](/images/bluetooth/bt_header_packet.png)   
-Header域包含了很多链路控制的信息，不过总得来说，可以总结为6个部分：   
-<font color=orange>LT_ADDR</font> : 3bit的逻辑传输地址，他是用来表示master是把这个包发给哪一个slave的。或者这个包是从哪个slave发送过来的。   
-<font color=orange>TYPE</font> : 表示packet的类型   
-<font color=orange>FLOW</font> : 是流控位，只有在ACL逻辑传输的时候才会使用，当RX buffer满的时候，就会把这个位置0，表示stop。当buffer又空了之后，就会把这个位置为1告诉TX可以继续发送了。需要注意的是ACL-C以及SCO,ESCO是不能使用这个位的。   
-<font color=orange>ARQN </font>: 是用来告知tx放，payload是成功传输的，就是通过了CRC校验。   
-<font color=orange>SEQN</font> : 就是数据流的sequence number。   
-<font color=orange>HEC </font>: 就是前向纠错。  
+Header域包含了很多链路控制的信息，不过总得来说，可以总结为6个部分：  
+ 
+**LT_ADDR**  : 3bit的逻辑传输地址，他是用来表示master是把这个包发给哪一个slave的。或者这个包是从哪个slave发送过来的。   
+**TYPE**  : 表示packet的类型   
+**FLOW**  : 是流控位，只有在ACL逻辑传输的时候才会使用，当RX buffer满的时候，就会把这个位置0，表示stop。当buffer又空了之后，就会把这个位置为1告诉TX可以继续发送了。需要注意的是ACL-C以及SCO,ESCO是不能使用这个位的。   
+**ARQN** : 是用来告知tx放，payload是成功传输的，就是通过了CRC校验。   
+**SEQN** : 就是数据流的sequence number。   
+**HEC**  : 就是前向纠错。  
 
 根据 TYPE 和 逻辑传输的类型就可以获得该 packet 的类型 。  
 ![](/images/bluetooth/bt_packet_type.png)  
-下面主要介绍5个common packet type， 这几种Type称为Link control packets：     
-<font color=orange>ID Packet</font>：这个packet就是上文提到的只有ACCESSCODE那一种packet。我们之后提到的inquiry msg就是一个ID Packet。       
-<font color=orange>NULL Packet</font>：这个packet只有ACCESS CODE和HEADER。一般来说他是用来返回链路信息的，比如什么rx buffer状态，或者ARQN之类的。他不需要对端的确认。    
-<font color=orange>POLL Packet</font>：和NULL Packet是类似的，比较大的差别就在于它需要对端回确认信息。需要注意的是不能会POLL Packet，否则就没玩没了。   
-<font color=orange>FHS Packet</font>：这个包的特别之处在于他包含了发送的clk信息和address信息，在page等开始的同步过程中起到了很大的作用。   
-<font color=orange>DM1 Packet</font>：这个packet的特别之处在于所有逻辑链路的控制信息都需要允许这种包，不过他也能传输data，不过仅限于ACL链路中，从一定程度上来说，可以认为他是一种ACL的packet。
+下面主要介绍5个common packet type， 这几种Type称为Link control packets：   
+    
+**ID Packet** ：这个packet就是上文提到的只有ACCESSCODE那一种packet。我们之后提到的inquiry msg就是一个ID Packet。       
+**NULL Packet** ：这个packet只有ACCESS CODE和HEADER。一般来说他是用来返回链路信息的，比如什么rx buffer状态，或者ARQN之类的。他不需要对端的确认。    
+**POLL Packet** ：和NULL Packet是类似的，比较大的差别就在于它需要对端回确认信息。需要注意的是不能会POLL Packet，否则就没玩没了。   
+**FHS Packet** ：这个包的特别之处在于他包含了发送的clk信息和address信息，在page等开始的同步过程中起到了很大的作用。   
+**DM1 Packet** ：这个packet的特别之处在于所有逻辑链路的控制信息都需要允许这种包，不过他也能传输data，不过仅限于ACL链路中，从一定程度上来说，可以认为他是一种ACL的packet。
 其他类型的 packet 类型大概可以分为   
 （1）SCO Packets   
 HV1 Packet， HV2 Packet， HV3 Packet，DVPacket。   

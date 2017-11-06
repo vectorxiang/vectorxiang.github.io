@@ -27,4 +27,4 @@ adb shell ptt_socket_app -v -d -f
 具体测项参考文档
 
 # iwpriv
-除了 QRCT , Qcom 也提供了 WEXT 的接口来进行相应的 Tx/Rx 测试， 测试前去要先进入 FTM mode , 相关测试command参考 *80-Y0476-6_C_WLAN_Android_FTM_Commands_Reference_Guide.pdf *
+除了 QRCT , Qcom 也提供了 WEXT 的接口来进行相应的 Tx/Rx 测试， 测试前去要先进入 FTM mode , 相关测试command参考 *80-Y0476-6_C_WLAN_Android_FTM_Commands_Reference_Guide.pdf*

@@ -19,7 +19,9 @@ categories: [bluetooth]
 
  * Broadcomm 的方式是将 BT chip 和 SOC 之间的 uart 断开，直接从BT chip 端引出 uart 接到一个串口转USB卡上，将转接卡插到PC上，PC可以直接读写这个接口来传递hci command 和接收 event . 另外由于chip 和 SOC 端的 uart 被切断， 博通有提供一个 windows上的 bluetool用来从PC端 download BT FW ，所以测试流程是：修改gpio上电；连接上转接卡，使用 bluetool 下 fw;开始测试 。 
 
- * Qualcomm 的 BT 集成在 SOC 内部，开机就会上电并由 wcnss driver download FW 。另外高通支持在USB连接的情况下在PC上生成一个 NMEA port ，和上面一样，PC可以通过这个端口来直接和 BT 通信。 测试方法是： 1. setprop sys.usb.config diag,serial_tty,serial_smd 并配置 NEMA port 为1～8 ，band rate 115200 ；2.打开 wdsdaemon ,因为上一个步骤中adb 被关掉了，所以可以通过 audio debug port 来执行，或者在 setprop 中执行 ，也可以写一个app执行 ; 开始测试。
+ * Qualcomm 的 BT 集成在 SOC 内部，开机就会上电并由 wcnss driver download FW 。另外高通支持在USB连接的情况下在PC上生成一个 NMEA port ，和上面一样，PC可以通过这个端口来直接和 BT 通信。 测试方法是：
+ 1. setprop sys.usb.config diag,serial_tty,serial_smd 并配置 NEMA port 为1～8 ，band rate 115200 ；
+ 2. 打开 wdsdaemon ,因为上一个步骤中adb 被关掉了，所以可以通过 audio debug port 来执行，或者在 setprop 中执行 ，也可以写一个app执行 ; 开始测试。
 
 ### Profiles
 测试profiles之前需先到 bluetooth.org 上填写支持的 profiles 和其各个 features 生成测试文件，profiles 测试主要是由认证机构来完成，但其中会有很多测项无法fail ,这些就需要我们提供正确的测试方法或者是由我们自己将这些 fail 项测试OK之后将生成的测试报告传给认证机构 。                       
