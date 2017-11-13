@@ -1,13 +1,11 @@
 ---
 layout: post
-title: "Wifi Scan in WAPS"
+title: "Scan in WAPS"
 description:
 category: wifi
 tags: [network, android , wifi]
 ---
-#Scan
-回顾一下 ：
-
+回顾一下 wpas 创建 socket 之后监听连接 
 ```c
 =>wpa_supplicant_add_iface
  ==>wpa_supplicant_init_iface
@@ -15,8 +13,46 @@ tags: [network, android , wifi]
      ===>wpas_ctrl_iface_open_sock
            eloop_register_read_sock(priv->sock, wpa_supplicant_ctrl_iface_receive, wpa_s, priv);
 ```
+来看一下 eloop_register_read_sock 的实现 
+```c
+int eloop_register_read_sock(int sock, eloop_sock_handler handler,
+			     void *eloop_data, void *user_data)
+{
+	return eloop_register_sock(sock, EVENT_TYPE_READ, handler,
+				   eloop_data, user_data);
+}
 
-client 发送的命令全部都由 wpa_supplicant_ctrl_iface_receive 来处理   
+int eloop_register_sock(int sock, eloop_event_type type,
+			eloop_sock_handler handler,
+			void *eloop_data, void *user_data)
+{
+	struct eloop_sock_table *table;
+
+	// 获取到全局变量 struct eloop_data eloop 中该事件对应的 eloop_sock_table
+	table = eloop_get_sock_table(type);
+	return eloop_sock_table_add_sock(table, sock, handler,
+					 eloop_data, user_data);
+}
+```
+可以看到这里将 socket 根据事件类型加入到 eloop 的可读事件 table (readers) 中 ，这里需要看一下 eloop_sock_table 的结构：
+```c
+struct eloop_sock_table {
+	int count;		//所有监听 fd 的个数
+	//fd句柄及相关handler 的数组指针， 严格来说这里 table 指向的是一个eloop_sock 数组
+	struct eloop_sock *table;	
+	eloop_event_type type;	//该 table 监听事件类型
+	int changed;
+};
+
+struct eloop_sock {
+	int sock;	//fd句柄
+	void *eloop_data;	
+	void *user_data;
+	eloop_sock_handler handler;	//event 处理函数
+	WSAEVENT event;
+};
+```
+因为 wpas 的 socket 类型为基于 packages 的 DGRAM 方式，server 端只需监听单个的 socket 即可， 这里所有写到 server socket  的event 都会由 wpa_supplicant_ctrl_iface_receive 来处理。 
 
 ```c
 static void wpa_supplicant_ctrl_iface_receive(int sock, void *eloop_ctx,void *sock_ctx)
@@ -29,7 +65,7 @@ static void wpa_supplicant_ctrl_iface_receive(int sock, void *eloop_ctx,void *so
 	res = recvfrom(sock, buf, sizeof(buf) - 1, 0,(struct sockaddr *) &from, &fromlen);
 	......
 	buf[res] = '\0';
-	// 客户端第一次和WPAS连接时， 需要发送"ATTACH"命令
+	// 客户端在调用 wpa_ctrl_attach 时， 会首先发送"ATTACH"命令
 	if (os_strcmp(buf, "ATTACH") == 0) {
 		......// 略过相关处理
 	}
@@ -52,8 +88,7 @@ static void wpa_supplicant_ctrl_iface_receive(int sock, void *eloop_ctx,void *so
 		eapol_sm_notify_ctrl_attached(wpa_s->eapol);
 }
 ```
-绝大部分命令都由wpa_supplicant_ctrl_iface_process函数处理    
-
+绝大部分命令都由wpa_supplicant_ctrl_iface_process函数处理 ， 在搜索时上层会发送 "SCAN" , 来看一下其处理:    
 ```c
 char * wpa_supplicant_ctrl_iface_process(struct wpa_supplicant *wpa_s,
 					 char *buf, size_t *resp_len)
@@ -99,11 +134,37 @@ char * wpa_supplicant_ctrl_iface_process(struct wpa_supplicant *wpa_s,
 
 ```c
 => wpas_ctrl_scan
- ==> wpa_supplicant_req_scan
-   ===> eloop_register_timeout(sec, usec, wpa_supplicant_scan, wpa_s, NULL);
-    ====> wpa_supplicant_trigger_scan
+ ==> wpa_supplicant_req_scan(struct wpa_supplicant *wpa_s, int sec, int usec)
+{
+	// 参数sec 和 usec 代表延迟多长时间开始扫描， 这里上面传下来的都是 0
+	
+	/* 查询当前 timeout 队列里已经有的相同任务，
+	    如果延迟时间较新 request 长时以新任务取代，返回1，
+	    当队列中的任务时间更早时则什么都不做， 返回0，
+	    当找不到相同任务时， 返回-1,
+	*/
+	res = eloop_deplete_timeout(sec, usec, wpa_supplicant_scan, wpa_s,
+				    NULL);
+	if (res == 1) {
+		wpa_dbg(wpa_s, MSG_DEBUG, "Rescheduling scan request: %d.%06d sec",
+			sec, usec);
+	} else if (res == 0) {
+		wpa_dbg(wpa_s, MSG_DEBUG, "Ignore new scan request for %d.%06d sec since an earlier request is scheduled to trigger sooner",
+			sec, usec);
+	} else {
+		wpa_dbg(wpa_s, MSG_DEBUG, "Setting scan request: %d.%06d sec",
+			sec, usec);
+		eloop_register_timeout(sec, usec, wpa_supplicant_scan, wpa_s, NULL);
+	}
+}
+```
+scan request 最后会在 timeout 事件触发时由相应的 handler 来处理， 这里是由 wpa_supplicant_scan 来处理 ，这个函数内容非常的多， 会根据传进来的 wpa_s 中参数做不同的处理， 例如：当某些条件则不扫描，当正在扫描时延迟1s进行扫描， 设定扫描频段等。 最后执行的是 wpa_supplicant_trigger_scan :
+```c
+    ====>wpa_supplicant_trigger_scan(wpa_s, scan_params);
+    	  // 实际上也是 timeout 事件
           radio_add_work(wpa_s, 0, "scan", 0, wpas_trigger_scan_cb, ctx)
-     =====>wpa_drv_scan
+     =====>wpas_trigger_scan_cb
+     	======>wpa_drv_scan(wpa_s, params);
 ```
 wpa_drv_scan 会去调用 driver interface 中的 scan2 
 
@@ -168,8 +229,9 @@ fail:
 ```
 接下来 scan message经由netlink进入到Linux内核当中去处理。   
 
-在搜索结束之后，waps 收到driver 的 NL80211_CMD_NEW_SCAN_RESULTS    
-D/wpa_supplicant( 1331): nl80211: Drv Event 34 (NL80211_CMD_NEW_SCAN_RESULTS) received for wlan0   
+
+在搜索结束之后，waps 收到driver 的 **NL80211_CMD_NEW_SCAN_RESULTS**    
+> D/wpa_supplicant( 1331): nl80211: Drv Event 34 (NL80211_CMD_NEW_SCAN_RESULTS) received for wlan0   
 
 ```c
 	case NL80211_CMD_NEW_SCAN_RESULTS:
@@ -180,10 +242,93 @@ D/wpa_supplicant( 1331): nl80211: Drv Event 34 (NL80211_CMD_NEW_SCAN_RESULTS) re
 		eloop_cancel_timeout(wpa_driver_nl80211_scan_timeout, drv,
 				     drv->ctx);
 		send_scan_event(drv, 0, tb);
+			==> wpa_supplicant_event(drv->ctx, EVENT_SCAN_RESULTS, &event);
 		break;
 ```
-在 send_scan_event 中会先调用 driver interface 中的 get_scan_results2 , 这个方法会向 driver 发 NL80211_CMD_GET_SCAN 并等待收到结果    
-D/wpa_supplicant( 1331): nl80211: Received scan results (14 BSSes)   
+wpa_supplicant_event被driver event模块用来发送driver事件给WPAS  
+
+```c
+void wpa_supplicant_event(void *ctx, enum wpa_event_type event,
+			  union wpa_event_data *data)
+{
+	case EVENT_SCAN_RESULTS:
+		.......
+
+		if (wpa_supplicant_event_scan_results(wpa_s, data))
+			==> _wpa_supplicant_event_scan_results(wpa_s, data, 1);
+			break; /* interface may have been removed */
+		.......
+		break;
+}
+
+static int _wpa_supplicant_event_scan_results(struct wpa_supplicant *wpa_s,
+					      union wpa_event_data *data,
+					      int own_request)
+{
+	struct wpa_scan_results *scan_res = NULL;
+
+	wpa_supplicant_notify_scanning(wpa_s, 0);
+
+	// 获得无线网络扫描结果 
+	scan_res = wpa_supplicant_get_scan_results(wpa_s,
+						   data ? &data->scan_info :
+						   NULL, 1);
+	if (scan_res == NULL) {
+		.......  //  扫描结果为空， 重新发起扫描
+		wpa_supplicant_req_new_scan(wpa_s, 1, 0);
+		ret = -1;
+		goto scan_work_done;
+	}
+
+```
+wpa_supplicant_get_scan_results 中调用到 driver interface 中的 get_scan_results2 , 这个方法会向 driver 发 NL80211_CMD_GET_SCAN 并等待收到结果 
+> D/wpa_supplicant( 1331): nl80211: Received scan results (14 BSSes)
+
+```c
+static int _wpa_supplicant_event_scan_results(struct wpa_supplicant *wpa_s,
+					      union wpa_event_data *data,
+					      int own_request)
+{
+	struct wpa_scan_results *scan_res = NULL;
+	......
+
+	wpa_supplicant_notify_scanning(wpa_s, 0);
+
+	scan_res = wpa_supplicant_get_scan_results(wpa_s,
+						   data ? &data->scan_info :
+						   NULL, 1);
+	.......
+	wpas_notify_scan_results(wpa_s);
+
+	wpas_notify_scan_done(wpa_s, 1);	
+```
+
+来看一下获取到的扫描结果 wpa_scan_results 结构体 
+```c
+struct wpa_scan_results {
+	struct wpa_scan_res **res;	//指向wpa_scan_res数组
+	size_t num;	//res 数组个数
+	struct os_reltime fetch_time;
+};
+
+struct wpa_scan_res {
+	unsigned int flags;
+	u8 bssid[ETH_ALEN];	//无线网络的bssid
+	int freq;		//工作频率
+	u16 beacon_int;
+	u16 caps;
+	int qual;
+	int noise;
+	int level;
+	u64 tsf;
+	unsigned int age;	//距离上一次收到该bss信息过去的毫秒时间
+	unsigned int est_throughput;
+	int snr;
+	size_t ie_len;
+	size_t beacon_ie_len;
+	/* Followed by ie_len + beacon_ie_len octets of IE data */
+};
+```
 
 然后向上层发送 WPA_EVENT_SCAN_RESULTS    
 D/wpa_supplicant( 1331): wlan0: New scan results available (own=1 ext=0)     

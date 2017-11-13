@@ -1,20 +1,19 @@
 ---
 layout: post
-title: "Android 之 wifi 简介"
+title: "Android 之 wifi 简介 & WifiService"
 description:
 category: wifi
 tags: [network, android , wifi]
-mathjax: 
-chart:
-comments: false
+catalog: true
 ---
-#1.架构
+# 1.架构
 ![](/images/network/android_wifi_arcitechture.png)   
 
-framework 提供的接口为 android.net.wifi ( frameworks/base/wifi/java/android/net/wifi )，app直接通过其中的类(主要有 WifiManager )来控制 wifi , 其通过binder来调用wifiservice的服务，最终是通过wifi HAL来向wpa_supplicant发送cmd，来实现对wifi的操作.
+framework 提供的接口为 android.net.wifi ( frameworks/base/wifi/java/android/net/wifi )，app直接通过其中的接口(主要有 WifiManager )来控制 wifi  。 
+其通过binder来调用wifiservice的服务，实际上 wifiservice 通过 socket 连接来向 wpa_supplicant 发送cmd，来实现对wifi的操作.
 
-#2.WifiService
-WifiService 是 Android Java Framework 中负责 Wi-Fi 功能的核心服务。   
+# 2.WifiService
+WifiService 是 Android Java Framework 中负责 Wi-Fi 功能的核心服务。在开机时由 SystemServer 启动。
        
 *SystemServer.java*    
         
@@ -39,8 +38,7 @@ public final class WifiService extends SystemService {
         publishBinderService(Context.WIFI_SERVICE, mImpl);
     }
 ```
-所以 WifiService 的主要工作都是在 WifiServiceImpl 中完成: 
-
+WifiService 的主要工作都是在 WifiServiceImpl 中完成:    
 ```java
     public WifiServiceImpl(Context context) {
         mContext = context;
@@ -119,9 +117,9 @@ public final class WifiService extends SystemService {
 
 ![](/images/network/android_WifiStateMachine.png)   
 
-###2.1 WifiNative
-下面重点看一下 WifiNative , 它用于和 WPAS 通信，期内部定义了较多的native方法（ 对应的JNI模块是android_net_wifi_Wifi） 。下面介绍其中最重要的两个方法 ：
-####startSupplicant
+### 2.1 WifiNative
+下面重点看一下 WifiNative , 它用于和 WPAS 通信，其内部定义了较多的native方法（ 对应的JNI模块是android_net_wifi_Wifi） 。下面介绍其中最重要的两个方法 ：
+#### startSupplicant
 用于启动WPAS， startSupplicant是一个native函数， 其 JNI 函数为 android_net_wifi_startSupplicant， 代码如下所示。   
 
 *android_net_wifi_Wifi.c：：android_net_wifi_startSupplicant*    
@@ -217,7 +215,7 @@ int wifi_start_supplicant(int p2p_supported)
 }
 ```
 
-####connectToSupplicant
+#### connectToSupplicant
 另外一个比较重要的函数就是 connectToSupplicant ，它将通过WPAS控制API和WPAS建立交互关系。   
 
 ```c
@@ -266,7 +264,7 @@ int wifi_connect_on_socket_path(const char *path)
 ```
 之后在 wifi.c中， wifi_send_command 会使用ctrl_conn中的wpa_ctrl对象向WPAS发送命令并接收回复， 而 wifi_ctrl_recv 函数将使用monitor_conn中的wpa_ctrl对象接收来自WPAS的消息。
 
-###2.2 WifiMonitor
+### 2.2 WifiMonitor
 WifiMonitor最重要的内容是其内部的WifiMonitor线程， 该线程专门用于接收来自WPAS的消息。  
  
 ```java
@@ -306,7 +304,7 @@ WifiMonitor最重要的内容是其内部的WifiMonitor线程， 该线程专门
     }
 ```
 
-###2.3 WifiController
+### 2.3 WifiController
 WifiController 也是一个状态机 ， 其状态如下图：   
 
 ![](/images/network/android_wifi_WifiController.png)
@@ -318,7 +316,8 @@ WifiController 也是一个状态机 ， 其状态如下图：
             setInitialState(mApStaDisabledState);
         }
 ```
-  
+
+待补充...
 
 
 

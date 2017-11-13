@@ -1,6 +1,6 @@
 ---
 layout: post
-title: "Android之wifi相关API"
+title: "Android 之 WiFi Framework API"
 description:
 category: wifi
 tags: [network, android , wifi]
@@ -11,7 +11,6 @@ comments: false
 ---
 ## 相关授权:                    
 使用wifi    
-
 >\<uses-feature android:name="android.hardware.wifi" /\>     
                      
 访问Wi-Fi网络状态信息    
@@ -21,20 +20,19 @@ comments: false
 >\<uses-permission android:name="android.permission.CHANGE_WIFI_STATE" /\>      
                       
 改变WiFi多播状态   
-
 >\<uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" /\>                        
 
 ## android.net.wifi 中常用的类有：    
       
-1. ScanResult, 主要用来描述已经检测出的接入点，包括接入点的地址、接入点的名称、身份认证、频率、信号强度等。
+1. **ScanResult**, 主要用来描述已经检测出的接入点，包括接入点的地址、接入点的名称、身份认证、频率、信号强度等。
 
-2. WifiConfiguration, wifi网络配置，包括安全配置等。
+2. **WifiConfiguration**, wifi网络配置，包括安全配置等。
 
-3. WifiInfo, Wifi无线连接的描述，包括接入点、网络连接状态、隐藏的接入点、IP地址、连接速度、MAC地址、网络ID、信号强度等。
+3. **WifiInfo**, Wifi无线连接的描述，包括接入点、网络连接状态、隐藏的接入点、IP地址、连接速度、MAC地址、网络ID、信号强度等。
 
-4. WifiManager, 提供管理wifi连接的大部分API。
+4. **WifiManager**, 提供管理wifi连接的大部分API。
 
-5. WifiManager.WifiLock, 通过WifiLock来锁定wifi网络，使其一直保持连接，直到这个锁定被释放。如果app需要下载很大的文件，就需要保持wifi锁，来确保app有足够的时间下载完成。wifi锁不能超越wifi-enabled设置，也没有飞行模式。    
+5. **WifiManager.WifiLock**, 通过WifiLock来锁定wifi网络，使其一直保持连接，直到这个锁定被释放。如果app需要下载很大的文件，就需要保持wifi锁，来确保app有足够的时间下载完成。wifi锁不能超越wifi-enabled设置，也没有飞行模式。    
 
 ## WifiManager的常用方法
 
@@ -108,7 +106,6 @@ mWifiInfo.getBSSID();
 
 // 得到IP地址
 mWifiInfo.getIpAddress();
-
 ......
 ```
 

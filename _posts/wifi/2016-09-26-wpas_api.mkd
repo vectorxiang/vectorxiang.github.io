@@ -45,7 +45,7 @@ solicited event(有请求的事件)， 会通过 wpa_ctrl_request 的 reply 参�
 ```c
 static int wpa_cli_open_connection(const char *ifname, int attach)
 {
-	// 创建发送 command 的连接 , Android 中 cfile 为 /data/misc/wifi/sockets
+	// 创建发送 command 的连接 , Android 中 cfile 为 /data/misc/wifi/sockets/wlan0
 	ctrl_conn = wpa_ctrl_open2(cfile, client_socket_dir);
 
 	// 创建监听 unsolicited event 的连接
