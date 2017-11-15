@@ -1,0 +1,101 @@
+---
+layout: post
+title: "EAP & 802.1x"
+category: wifi
+tags: [network, wifi]
+catalog: true
+---
+> 主要内容来自 《深入理解Android：WiFi模块 NFC和GPS卷》
+
+# 1. EAP
+目前身份验证方面最基础的安全协议就是EAP（ Extensible Authentication Protocol） ， 协议文档定义在RFC3748中。 EAP是一种协议， 更是一种协议框架。 基于这个框架， 各种认证方法都可得到很好的支持。
+
+### 1.1 EAP 结构
+几个概念 ：  
++ **Authenticator**（ 验证者） ： 简单点说， Authenticator就是响应认证请求的实体（ Entity） 。 对无线网络来说， Authenticator往往是AP。
++ **Supplicant**（ 验证申请者 ） 发起验证请求的实体。 对于无线网络来说， Supplicant就是智能手机。
++ **BAS**（ Backend Authentication Server， 后端认证服务器） ： 某些情况下（ 例如企业级应用） Authenticator并不真正处理身份验证， 它仅仅将验证请求发给后台认证服务器去处理。 正是这种架构设计拓展了EAP的适用范围。
++ **AAA**（ Authentication、 Authorization and Accounting， 认证、 授权和计费） ： 另外一种基于EAP的协议。 实现它的实体属于BAS的一种具体形式， AAA包括常用的 RADIUS 服务器等。 在RFC3748中， AAA和BAS的概念可互相替代。
++ **EAP Server**： 表示真正处理身份验证的实体。 如果没有BAS， 则EAP Server功能就在Authenticator中， 否则该功能由BAS实现。
+
+![](/images/network/eap_arcitecture.png) 
+Supplicant通过EAPOL（ EAP Over LAN， 基于LAN的扩展EAP协议） 发送身份验证请求给Authenticator。 图中的身份验证由后台验证服务器完成。 如果验
+证成功， Supplicant就可正常使用网络了。
+
+### 1.2 EAP数据包的格式
+当EAPOL数据包格式Type域为EAP-Packet时，Packet Body为EAP数据包结构，其结构如下图所示    
+![](/images/network/eap_package.png)
+**Code**：指明EAP包的类型，共有4种：Request、Response、Success、Failure。Success和Failure类型的包没有Data域，相应的Length域的值为4。   
+**Identifier**：用于匹配Request消息和Response消息。    
+**Length**：EAP包的长度，包含Code、Identifier、Length和Data域，单位为字节。    
+**Data**：EAP包的内容，由Code类型决定。当Code为Request或Response的时候， Data字段还可细分为Type以及Type Data ，Type就是EAP Method Type。   
+![](/images/network/eap_data_format.png)      
+EAP Method Type取值如下:
++ 1： **代表Identity**。 用于Request消息中。 其Type Data字段一般将携带申请者的一些信息。 一般简写为EAP-Request/Identity或者Request/Identity。  
++ 2： **代表Notification**。 Authenticator用它传递一些消息（ 例如密码已过期、 账号被锁等） 给Supplicant。 一般简写为Request/Notification。
++ 3： **代表Nak**， 仅用于Response帧， 表示否定确认。 例如Authenticator用了Supplicant不支持的验证类型发起请求， Supplicant可利用Response/Nak消息以告知 Authenticator 其支持的验证类型。
++ 4： **代表身份验证方法中的MD5质询法**。 Authenticator将发送一段随机的明文给 Supplicant。 Supplicant收到该明文后， 将其和密码一起做MD5计算得到结果A， 然后将结果A返回给Authenticator。 Authenticator再根据正确密码和MD5质询文做MD5计算得到结果B。 A和B一比较就知道Supplicant使用的密码是否正确。
++ 5： **代表身份验证方法为OTP**（ One Time Password， 一次性密码） 。 这是目前最安全的身份验证机制。 相信网购过的读者都用过它， 例如网银付费时系统会通过短信发送一个密码， 这就是OTP。
++ 6： **代表身份验证方法为GTC**（ Generic Token Card， 通用令牌卡） 。 GTC和OTP类似， 只不过GTC往往对应一个实际的设备， 例如许多国内银行都会给申请网银的用户一个动态口令牌。 它就是GTC。
++ 254： **代表扩展验证方法**（ Expanded Types） 。
++ 255： **代表其他试验性用途**（ Experimental Use） 。
+
+### 1.3 EAP认证流程示例
+![](/images/network/eap_example.png)
+上图为一个简单的EAP交互。 第三和第四步时， Authenticator要求使用MD5质询法进行身份验证， 但Supplicant不支持， 故其回复NAK消息， 并通知Authenticator使用GTC方法进行身份验证。      
+第六步中， 如果Supplicant回复了错误的GTC密码时， Authenticator可能会重新发送Request消息以允许Supplicant重新尝试身份验证。 一般认证失败超过3次才会回复Failure消息。
+
+# 2. 802.1X
+IEEE802 LAN/WAN委员会为解决无线局域网网络安全问题，提出了802.1X协议。简单来说， 802.1X详细讨论了EAP在Wired LAN 上的实现， 即EAPOL .
+
+802.1X协议是一种基于端口的网络接入控制协议（port based network access control protocol）。“基于端口的网络接入控制”是指在局域网接入设备的端口这一级对所接入的用户设备进行认证和控制。连接在端口上的用户设备如果能通过认证，就可以访问局域网中的资源；如果不能通过认证，则无法访问局域网中的资源。
+
+### 2.1 802.1X的体系结构
+802.1X系统为典型的Client/Server结构，包括三个实体：客户端（Client）、设备端（Device）和认证服务器（Server）。
+
+![](/images/network/eap_802.11x_architecture.png)
+
+上面有提到 802.1X是**基于端口**的网络控制协议， 这里解释一下端口的核心概念 ，802.1X定义了两种Port ：
++  **UnControlled Port**， 只允许少量类型的数据流通（ 例如用于认证的EAPOL帧） 。
++  **Controlled Port**， 在端口认证通过前（ 即Port处于Unauthorized状态） ， 不允许传输任何数据。802.1X身份验证通过后， Control Port转入Port Authorized状态。 这时， 双方就可通过Controlled Port传递任何数据了。
+
+![](/images/network/eap_802.1x_port.png)
+
+### 2.2 EAPOL数据包的格式
+EAPOL(EAP over LAN)是802.1X协议定义的一种报文封装格式，主要用于在客户端和设备端之间传送EAP协议报文，以允许EAP协议报文在LAN上传送。 下图为其数据包格式 :
+![](/images/network/eapol_package.png)
+**PAE Ethernet Type**：表示协议类型，为0x888E。    
+**Protocol Version**：表示EAPOL帧的发送方所支持的协议版本号。    
+**Type**：表示EAPOL数据帧类型，目前设备上支持的数据类型见下表。    
+![](/images/network/eapol_package_type.png)
+**Length**：表示数据长度，也就是“Packet Body”字段的长度，单位为字节。如果为0，则表示没有后面的数据域。    
+**Packet Body**：表示数据内容，根据不同的Type有不同的格式。   
+
+EAPOL-Key 用于交换身份验证过程中使用的密钥信息， 其对应的Packet Body格式如下 
+![](/images/network/eapol_package_type_key_body.png)
+Descriptor Type 表示后面 Descriptor Body 的类型。 802.1X中， Descriptor Type值为2时， Descriptor Body的内容由802.11定义。此处展示一个实际的例子 :  
+![](/images/network/eapol_package_example.png)
+Key Descriptor Type值为2， 表示EAPOL RSN Key
+
+### 2.3 EAPOL认证流程示例
+用MD5质询算法作为身份验证的EAPOL认证流程  
+![](/images/network/eapol_example.png)
+(1)        Supplicant主动向Authenticator发送EAPOL-Start消息来触发认证。 注意， **EAPOL-Start消息不是必需的**。   
+
+(2)        Authenticator收到EAPOL-Start消息后， 将发出EAP-Request/Identity消息以要求 Supplicant 输入用户名。 由于 EAPOL-Start 消息不是必需的， 所以**一个未经验证的 Supplicant 发送了其他数据包也将触发 Authenticator 发送 EAP-Request/Identity 消息**。   
+
+(3)        客户端程序响应设备端发出的请求，将用户名信息通过数据帧（EAP-Response/Identity报文）发送给设备端。设备端将客户端发送的数据帧经过封包处理后（RADIUS Access-Request报文）送给认证服务器进行处理。      
+
+(4)        RADIUS服务器收到设备端转发的用户名信息后，将该信息与数据库中的用户名表对比，找到该用户名对应的密码信息，用随机生成的一个加密字对它进行加密处理，同时也将此加密字通过RADIUS Access-Challenge报文发送给设备端，由设备端转发给客户端程序。      
+
+(5)        客户端程序收到由设备端传来的加密字（EAP-Request/MD5 Challenge报文）后，用该加密字对密码部分进行加密处理（此种加密算法通常是不可逆的），生成EAP-Response/MD5 Challenge报文，并通过设备端传给认证服务器。      
+
+(6)        RADIUS服务器将收到的已加密的密码信息（RADIUS Access-Request报文）和本地经过加密运算后的密码信息进行对比，如果相同，则认为该用户为合法用户，反馈认证通过的消息（RADIUS Access-Accept报文和EAP-Success报文）。      
+
+(7)        设备收到认证通过消息后将端口改为授权状态，允许用户通过端口访问网络。在此期间，设备端会通过向客户端定期发送握手报文的方法，对用户的在线情况进行监测。缺省情况下，两次握手请求报文都得不到客户端应答，设备端就会让用户下线，防止用户因为异常原因下线而设备无法感知。      
+
+(8)        客户端也可以发送EAPOL-Logoff报文给设备端，主动要求下线。设备端把端口状态从授权状态改变成未授权状态，并向客户端发送EAP-Failure报文。
+
+
+
+
