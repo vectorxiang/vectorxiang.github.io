@@ -1,0 +1,71 @@
+---
+layout: post
+title: "wifi 连接抓包 & 4-way handshake"
+description:
+category: wifi
+catalog: true
+tags: [network , wifi]
+---
+> 本地试验时因环境较复杂一直无法抓到完整的连接流程， 以下示例均来源于网络，本地试验和示例流程相同。
+
+# 1. 连接抓包示例 
+### 1.1 open方式下的connect
+![](/images/network/wifi_connect_open.png)
+在 open 方式下并不会有 4-way handshake 的过程， 后续传输的 package 并不会被加密。 抓到的air log 中的 data包都可以被直接解析出来。
+
+### 1.2 wpa/wpa2-psk方式下的connect
+![](/images/network/wifi_connect_wpa.png)
+
+### 1.3 wpa/wpa2-eap方式下的connect
+![](/images/network/wifi_connect_eap.png)
+相较于 psk 的方式， eap多一个 802.1x 的auth 过程
+
+# 2. 4-way handshake
+RSNA（ Robust Secure Network Association， 强健安全网络联合） 是802.11定义的一组保护无线网络安全的过程， 是一套安全组合拳。其中在密钥派生和缓存部分， RSNA基于802.1X提出了4-Way Handshake（ 四次握手协议， 用于派生对单播数据加密的密钥） 和Group Key Handshake（ 组密钥握手协议， 用于派生对组播数据加密的密钥） 两个新协议用于密钥派生。 
+
+在 WEP 中，所有STA都使用同一个WEP Key进行数据加密， 其安全性较差。 而RSNA中要求**不同的STA和AP关联后使用不同的Key进行数据加密**。这也就是RSNA中Pairwise（ 成对） 概念的来历 ：
+![](/images/network/wifi_Pairwise_Key.png)
+
+### 2.1 PTK的生成
+PTK（Pairwise Transient Key）也就是在4-way handshake中生成的 Key , 生成PTK，需要5个必要元素，PMK，ANonce（Nonce 1），SNonce（Nonce 2），Authenticate MAC（MAC 1），Supplicant MAC（MAC 2）。如下图： 
+![](/images/network/wifi_ptk.png)
+
+**PMK** (PairwiseMaster Key) ， 在4-wayhandshake前，AP/STA已经知道了PMK   
++ 在WPA-PSK中，PMK=pdkdf2_SHA1(passphrase,SSID, SSID length, 4096)
++ 在802.1x+EAP中，PMK=L(MSK,0,256)， MSK(Mastersession key)由802.1x auth 过程中交换获得     
+
+**ANonce** ，Nonce 1，AP生成的随机数     
+**SNonce** ，Nonce 2，STA生成的随机数    
+
+### 2.2 PTK的组成
+PTK包含3个部分，KCK（Key Confirmation Key），KEK（Key Encryption Key），TK（Temporal Key）。    
+
+PTK的总长度根据加密方式不同而不同：    
+当加密方式是TKIP时，PTK长512位，按顺序分别为KCK占128位，KEK占128位，TK占128位,MIC key占128位。    
+当加密方式是CCMP时，PTK长384位，按顺序分别为KCK占128位，KEK占128位，TK占128位。   
+![](/images/network/wifi_ptk_format.png)
+1） **EAPOL KCK**(key confirmation key),16位，对应于2.1节图中的 EAPOL MIC , 用来在EAPOL 4-way shake 时校验 PTK 完整性    
+2） **EAPOL KEK**(key encryption key),16位，对应于2.1节图中的 EAPOL Encr，用于在EAPOL 4-way shake 的3/4的时候来加密GTK等数据   
+3） **TK**(TemporaryKey),16位，对应于2.1节图中的DataEncr，用于加密单播数据    
+4）  **Data Mic**，16位，对应于2.1节图中的DataMIC，具体又可分为8位的Tx key和8位的Rx key，用于数据传输的时候 TKIP 方式的 Michael完整性校验。CCMP不用。
+
+### 2.3 4-way handshake流程
+![](/images/network/wifi_ptk_process.png)
+1） Authenticator 生成 ANonce ， 然后利用EAPOL-Key消息将其发给Supplicant    
+
+2） Supplicant 根据 ANonce、 自己生成 SNonce ，然后加上其他已知信息生成 PTK . Supplicant随后将SNonce以及一些信息通过第二个EAPOL-Key发送给Authenticator。 Message 2还包含一个信息完整校验 MIC (由PTK 中的KCK 来校验)。AP收到SNonce以后，就可以生成PTK了，将收到的MIC和自己生成的MIC比较进行完整性校验，如果校验失败，握手失败。校验成功，AP生成PTK和GTK(GroupTransient Key，用来加密组播和广播)。    
+> EAPOL-key 中的 Key MIC 是 EAPOL-Key frames 的完整性校验值， 校验部分为从 EAPOL protocol version field 到 Key Data field ， 将 Key MIC 设置为0 然后计算出MIC。
+
+3）  Authenticator将发送第三个EAPOL-Key给Supplicant， 该消息携带组临时密码（ Group Transient Key， GTK， 用于后续更新组密钥， 该密钥用 KEK 加密） 、 MIC（ 用KCK加密） 。 Supplicant收到Message 3后也将做一些计算， 以判断AP的 PTK是否正确。 
+> GTK是一组全局加密密钥，所有与该AP建立关联的STA均使用相同的GTK，AP用这个GTK来加密所有与它建立关联的STA的通信报文， STA则使用这个GTK来解密由AP发送的报文并检验其MIC。
+
+4） Supplicant 最后发送一次 EAPOL-Key 给Authenticator用于确认。
+
+在四次握手中 PSK/ PMK/ PTK 都不会包含在传输的 package中，保证了密钥的安全性。再网上可以看到一些 WPA-PSK 的破解：   
+1. 需要抓到合法客户端的握手包， 可以先发送 DEAUTH 包攻击让客户端断开，然后在客户端重连时抓包获取到 ANonce ， SNonce 和双方的 MAC, 以及握手包中的 MIC    
+2. 本地利用字典中的 PSK ， 然后加上 AP 的 SSID 生成PMK, 进而利用上面抓到的数据生成 PTK 。 然后利用 PTK 加上上面抓到的 EAPOL-key 包计算出 MIC 和原包中的 MIC 比较， 如一致则 PSK 就是密钥， 否则尝试字典里的其他PSK , 不断的去尝试计算导致这个过程会非常的耗时。
+
+
+
+
+
