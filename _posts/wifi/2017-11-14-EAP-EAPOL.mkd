@@ -42,7 +42,7 @@ EAP Method Type取值如下:
 
 ### 1.3 EAP认证流程示例
 ![](/images/network/eap_example.png)
-上图为一个简单的EAP交互。 第三和第四步时， Authenticator要求使用MD5质询法进行身份验证， 但Supplicant不支持， 故其回复NAK消息， 并通知Authenticator使用GTC方法进行身份验证。      
+上图为一个简单的EAP交互。 第一步和第二步中Authenticator 要求 Supplicant 报上用户名 Supplicant 回应用户名。 第三和第四步时， Authenticator要求使用MD5质询法进行身份验证， 但Supplicant不支持， 故其回复NAK消息， 并通知Authenticator使用GTC方法进行身份验证。      
 第六步中， 如果Supplicant回复了错误的GTC密码时， Authenticator可能会重新发送Request消息以允许Supplicant重新尝试身份验证。 一般认证失败超过3次才会回复Failure消息。
 
 # 2. 802.1X

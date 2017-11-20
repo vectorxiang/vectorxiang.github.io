@@ -229,6 +229,10 @@ fail:
 ```
 接下来 scan message经由netlink进入到Linux内核当中去处理。   
 
+这里的总体流程如下图(截图来自《深入理解Android:WIFI模块...》) 
+
+![](/images/network/wifi_wpas_scan_process.png)
+
 
 在搜索结束之后，waps 收到driver 的 **NL80211_CMD_NEW_SCAN_RESULTS**    
 > D/wpa_supplicant( 1331): nl80211: Drv Event 34 (NL80211_CMD_NEW_SCAN_RESULTS) received for wlan0   
@@ -335,3 +339,5 @@ D/wpa_supplicant( 1331): wlan0: New scan results available (own=1 ext=0)
 D/wpa_supplicant( 1331): CTRL_IFACE monitor sent successfully to /data/misc/wifi/sockets/wpa_ctrl_950-2\x00
 
 上层收到该消息之后会主动下 command 给 waps 获取搜索结果。
+
+![](/images/network/wifi_wpas_getscan_result.png)

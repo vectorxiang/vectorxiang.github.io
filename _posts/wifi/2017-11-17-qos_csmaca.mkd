@@ -1,0 +1,121 @@
+---
+layout: post
+title: "WLAN CSMA/CA & QoS"
+description:
+category: wifi
+catalog: true
+tags: [network , wifi]
+---
+> 参考 [802.11协议精读2：DCF与CSMA/CA](https://zhuanlan.zhihu.com/p/20721272) 
+
+# 1. CSMA/CA
+当在同一个媒介下多个节点同时传输数据时，必然可能产生信道使用的冲突问题造成丢包或大量重传。    
+在有线网络中最常使用的方法（ 此处仅考虑以太网） 是**CSMA/CD**（ Carrier Sense Multiple Access/Collision Detect， 载波监听多路访问/冲突检测机制） 。 其主要工作原理是： 工作站发送数据前先监听信道是否空闲， 若空闲则立即发送数据。 并且工作站在发送数据时， **边发送边继续监听**。 若监听到冲突， 则立即停止发送数据并等待一段随机时间， 然后再重新尝试发送。    
+
+在 CSMA/CD 中由于要检测冲突，设备必须能够一边接受数据信号一边传送数据信号，而这在无线系统中是无法办到的。在802.11中对CSMA/CD进行了一些调整，采用了新的协议 **CSMA/CA** (Carrier Sense Multiple Access with Collision Avoidance)或者 DCF (Distributed Coordination Function)。
+
+CSMA/CA主要使用两种方法来避免碰撞 : 竞争式访问 和 RTS-CTS握手 。
+
+### 1.1 竞争式访问
+在 802.11 中发送数据之前都要等待一段时间，这个时间中有的会包含一个随机值， 这样不同的结点发包的时间点就会错开。  
+
+先介绍一下图中的相关名词 :  
++ 帧间隙(Inter-frame Spacing) DIFS / SIFS 。 DIFS全称为Distributed Inter-frame Spacing，即分布式帧间间隙，SIFS称为Short inter-frame space，即短帧间间隔。在CSMA/CA中，发一个帧之前，都需要 "等待" 一个相应的帧间间隔，比如发送数据之前至少要等待DIFS时间，发送ACK之前需要等待SIFS时间。还有其他的帧间隙这里不再描述。
++ Slot Time：时隙是指的一个时间片段，在CSMA/CA中，节点竞争接入信道之前需要经过相应的随机回退（backoff）过程，其中backoff过程就是由很多个时隙所组成的。
++ Contention window：竞争窗口是用来让节点选择随机回退计数值（backoff counter）的范围。
++ Backoff：随机回退过程是指每一个节点在竞争信道时，所经历的随机退避过程。
+
+先假定一个网络拓扑环境如下 ： 
+![](/images/network/wifi_csma_example1.png)   
+若STA 1与STA 2同时向AP发送数据，那么就会在AP处发生冲突，从而两者都无法正确接收，最终传输失败。CSMA/CA就是提供一种避免冲突发生的接入规则 ：
+![](/images/network/wifi_csma_example_process1.png)  
+1)    当STA 1与STA 2相继存在数据，需要在竞争信道进行发送时，其首先需要 "等待" DIFS时间，若DIFS时间内，信道保持空闲状态，那么就可以进行backoff过程。    
+
+2)    若STA 1与STA 2进入backoff过程时，其首先需要从竞争窗口（Contention window）选择一个随机数，在802.11协议中，默认的初始竞争窗口为31，即随机回退计数值的范围即是[0,31]。在上图中，STA 1则是选择了8，而STA 2选择了2。
+
+3)    在backoff过程中，每经过一个slot time，节点会 "监听" 一次信道，若信道空闲，则相应的随机回退计数器的值减1。如上图中，经过3个slot time后，STA 1的随机倒数计数器从8递减至5，而STA 2相应从2递减至0。当节点的随机倒数计数器倒数至0时，节点竞争获得信道，从而可以发送数据。
+
+4)    当STA 2成功发送完数据， "等待" 了SIFS的时间之后，AP会向节点反馈ACK确认帧。当STA 2成功接收到ACK帧之后，这一次传输完成。
+
+5)    当这一次传输完成后，节点需要再次 "等待" DIFS的时间后，重新开始backoff过程。若节点刚刚发送完数据，那么在backoff过程开始时，需要重新从竞争窗口中选择一个随机数进行倒数。若节点没有发送数据，那么直接从上一次的倒数结果继续倒数, 如 STA 1基于上次的5直接开始倒数。
+
+还有一种情况 : AP 校验错误或者没有收到STA 的数据时, STA 将不会收到 ACK ，STA 在 ACK time out 之后会有一个 EIFS 的等待， 这里不再描述。 
+> 802.11 MAC Header 中的 duration 即代表SIFS+ACK的时间。
+
+现实中还有一种情况 ： STA1 和 STA2 的竞争窗口CW中选碰巧的随机到了一样的数值 :   
+![](/images/network/wifi_csma_example2.png)  
+这时AP 无法正常收到完整的数据包， 所以不会给两个 STA 发送 ACK , 两个 STA 在经过 EIFS 的等待之后重新开始竞争， 此时竞争窗口（CW）将采用BEB (Binary Exponential Back off 二进制指数退避算法)机制 。 此时CW范围会2倍扩大， 即从[0,31] 扩到到 [0,63] , 而如果随机数仍相同，则继续扩大 ， 在802.11中，一共允许回退6次，第7次不倍增窗口，再次尝试重发，若再次失败，则丢包。
+
+### 1.2 RTS/CTS模式
+同样以一个简单的隐藏结点为例: 
+![](/images/network/wifi_csma_example3.png)   
+由于两个节点的发送范围无法互相覆盖，从而两者在发送数据时，是无法通过物理监听的方法，探测对方是否有发送数据。从而按照我们之前所述的CSMA/CA机制，STA 1和STA 2一直会误认为信道空闲 。
+
+为了解决这个问题，故在DCF中，引入了RTS/CTS机制 ： 
++ RTS：Request To Send，即请求发送。RTS帧是一个单播帧，没有加密，其duration字段中填充包含后续发送过程中总体所需要时间。
++ CTS：Clear To Send，即信道清除帧。节点在收到CTS后，确认信道是空闲的，可以发送。CTS也是一个单播帧，没有加密，其duration字段包含除去RTS以及一个SIFS后，发送过程总体所需要时间。
+
+仍以上图的流程为例来看 RTS/CTS 是怎样工作的 :  
+![](/images/network/wifi_csma_example_process3.png)  
+1)   STA 2已经倒数至0，其首先发送RTS数据帧给AP。若在AP处没有冲突，即AP成功解调出STA 2的RTS，AP会在等待SIFS之后发送CTS帧给STA 2 。
+
+2)   这时候STA 1也可以解析该CTS信息，当STA 1接收到CTS之后，该CTS不是对应发给我的CTS。从而STA 1会将 CTS 数据帧的duration 给提取出来，并设置在自己本地的NAV（Network Allocation Vector）上。若NAV没有倒数到0，那么其会主动悬挂其随机回退计数值，在NAV没有倒数到0之前，其随机回退计数值不再继续倒数。
+
+3)   STA 2接收到CTS后，其发现该其是之前发送RTS的反馈。故节点已知信道空闲，在等待SIFS后，STA 2发送数据。当数据传输完成之后，AP向STA 2反馈ACK，从而最终完成一次传输。
+
+ RTS/CTS模式的思想是 "采用小的数据包碰撞，来避免大的数据包碰撞" ， 而如果数据包太小，则不需要采用RTS/CTS机制。设置RTS_threshold的范围一般为2347，其单位是byte，即如果数据包大小如果大于2347 byte，那么才会采用RTS/CTS模式，在现实应用中，可以根据具体的情况，设置一个最适合的值。
+
+# 2. WLAN QoS 介绍
+802.11网络提供了基于竞争的无线接入服务，但是不同的应用需求对于网络的要求是不同的，而原始的网络不能为不同的应用提供不同质量的接入服务。 IEEE 802.11e为基于802.11协议的WLAN体系添加了QoS特性， 为了保证不同WLAN厂商提供QoS的设备之间可以互通，定义了**WMM**（Wi-Fi Multimedia，Wi-Fi多媒体）标准。WMM标准使WLAN网络具备了提供QoS服务的能力。
+
+### 2.1 EDCA参数
+WMM协议通过对802.11协议的增强，将BSS（Basic Service Set，基本服务集）内的数据报文分为4个AC (Access Category)，高优先级的AC占用信道的机会大于低优先级的AC，从而使不同的AC能获得不同级别的服务。优先级从高到低的顺序分为：Voice（语音流）、Video（视频流）、Best-effort（尽力而为流）、Back-ground（背景流）。    
+
+WMM协议对每个AC定义了一套信道竞争EDCA参数，EDCA参数的含义如下所示。
++ **AIFSN**（Arbitration Inter Frame Spacing Number，仲裁帧间隙数），在802.11协议中，空闲等待时长（DIFS）为固定值，而WMM针对不同AC可以配置不同的空闲等待时长，AIFSN数值越大，用户的空闲等待时间越长，如下图中AIFS时间段；   
++ **ECWmin**（Exponent form of CWmin，最小竞争窗口指数形式）和 **ECWmax**（Exponent form of CWmax，最大竞争窗口指数形式)，决定了平均退避时间值，这两个数值越大，用户的平均退避时间越长，为下图中Backoff slots时间段；   
++ **TXOPLimit**（Transmission Opportunity Limit，传输机会限制），用户一次竞争成功后，可占用信道的最大时长。这个数值越大，用户一次能占用信道的时长越大，如果是0，则每次占用信道后只能发送一个报文。   
+![](/images/network/wifi_qos_edca.png)
+
+再实际使用中发现部分手机将参数调低造成和普通手机同时进行下载等操作时， 这些调低参数的手机更容易抢到信道使用权，现象是在同时使用时这些手机的 throughput 会更大。    
+高通平台可以通过修改 firmware config 来调整， 例如 （这里仅针对 Best-effort 调节， 其他AC也有类似参数可以设置）:
+> gEnableEdcaParams=1     
+gEdcaBeAifs=2    
+gEdcaBeCwmin=2     
+gEdcaBeCwmax=3      
+
+
+### 2.2 CAC准入策略
+CAC的原理是客户端只有在AP允许的情况下，才能以高优先级AC发送报文，否则只能用低优先级AC，保证高优先级AC中的客户端的带宽。高优先级AC包括：Voice和Video数据流；低优先级AC包括：Best-effort和Back-ground数据流。     
+AP的控制策略如下：    
++ **基于信道利用率的准入策略：**    
+计算1秒内的已接入的高优先级AC信道占用时间，和请求的客户端占用的信道时间，如果二者之和小于或等于用户配置的最大信道利用率，则允许该流接入；否则拒绝。
++ **基于用户个数的准入策略：**     
+当前高优先级AC的客户端数量加上请求的客户端数量，如果小于或等于用户配置的CAC最大用户个数，则允许该流接入；否则拒绝。如果一个客户端同时接入Voice和Video业务流，按一个接入客户端计算。
+
+### 2.3 U-APSD节能模式
+APSD（Automatic Power Save Delivery）是基于802.11e进行设计的。在802.11e中设置一个服务时间的概念，即Service Period（SP）。我们可以简单的理解成，若节点占据信道后，其制定一段服务时间，并且在该段时间内，该节点可以传输多个帧，换言之就是一次竞争多次传输。在ASPD中，分为S-APSD与U-APSD两种具体的工作模式。   
+
+先来看一下 APSD 的工作流程:   
+![](/images/network/wifi_qos_apsd.png)
+由于ASPD是基于802.11e的，所以QOS-AP与QOS-STA都是支持802.11e的设备。这里由QOS-STA发起一个传输过程，即首先会发送一个“Trigger Frame”帧，这个帧有可能是QoS data或者QoS Null帧，通过该帧，节点申请到一个服务时间，即Service Period Start 。 接下来在服务时间范围内，QOS-STA会持续和QOS-AP进行数据交换。当QOS-AP的缓存全被发送完之后，会在最后一个QOS-Data帧中的QOS控制字段，标注EOSP（End Of Service Period），从而结束一个服务时间，即Service Period End。   
+
+U-APSD（Unscheduled APSD）：基于非调度的APSD ，U-APSD只可以在EDCA的模式下进行使用。 客户端在关联时可以指定某些AC具有触发属性，某些AC具有发送属性，以及触发后最多允许发送的数据报文数量（触发和发送属性还可以在通过连接准入控制创建流的时候进行更改） 。    
+1. 客户端休眠后，发往客户端的属于具有发送属性AC的数据报文将被缓存在发送缓存队列中 。    
+2. 客户端需要发送属于具有触发属性AC的报文以获取发送缓存队列中的报文。AP收到触发报文后，按照接入时确定的发送报文数量，发送属于发送队列的报文。    
+3. 没有发送属性的AC仍然使用802.11定义的传统方式存储和传送。    
+
+
+### 2.4 SVP服务
+SVP服务是实现对IP头中Protocol ID为119的 SVP 报文的处理功能，将其放入指定的AC队列中。由于**SVP规定SVP报文不需要进行随机退避**，所以当对应AC队列中只有SVP报文时，可以将ECWmin和ECWmax均设置为0。
+
+
+### 2.5 ACK策略
+ACK策略有两种：Normal ACK和No ACK    
++ No ACK：在通信质量较好，环境干扰较少的情况下，无线报文交互时不使用ACK报文进行确认。能提高传输效率，但有可能造成丢包问题。     
++ Normal ACK：对每个发送的单播报文，接受者在成功接收后都发送一个ACK回应。
+
+ 
+
+
+ 
