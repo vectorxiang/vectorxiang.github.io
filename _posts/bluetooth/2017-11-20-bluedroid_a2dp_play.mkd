@@ -22,6 +22,9 @@ int timer_create(clockid_t clock_id, struct sigevent *evp, timer_t *timerid)
 *  value ： 设置timerid指定的定时器时间, 其中 it_interval 为周期的时间
 */
 int timer_settime(timer_t timerid, int flags, const struct itimerspec *value, struct itimerspect *ovalue);
+
+// 删除一个定时器：
+int timer_delete (timer_t timerid);
 ``` 
 bluedroid 中定时器相关的函数都在 alarm.c 中实现， 下面根据 alarm.h 中申明的几个函数来看是怎样使用的。
 
