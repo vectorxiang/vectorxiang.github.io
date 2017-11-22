@@ -44,13 +44,14 @@ bt_status_t btif_av_init(int service_id)
         /* 初始化a2dp 的状态机 */
         for (i = 0; i < btif_max_av_clients; i++)
         {
+            // 关键函数 ①
             btif_av_cb[i].sm_handle = btif_sm_init((const btif_sm_handler_t*)btif_av_state_handlers,
                                                     BTIF_AV_STATE_IDLE, i);
         }
-
+	// 关键函数 ②
         btif_transfer_context(btif_av_handle_event, BTIF_AV_INIT_REQ_EVT,
                 (char*)&service_id, sizeof(int), NULL);
-
+	// 关键函数 ③
         btif_enable_service(service_id);
     }
 
@@ -58,7 +59,7 @@ bt_status_t btif_av_init(int service_id)
 }
 ```
 
-分别来看这3个函数   
+分别来看以上3个关键函数
 
 ### 1.1 btif_sm_init
 用来初始化 a2dp 的状态机， 将 btif_av_cb[i].sm_handle 指向一个 btif_sm_cb_t 结构体     
@@ -104,7 +105,7 @@ btif_av_init 函数中还会调用到
         btif_transfer_context(btif_av_handle_event, BTIF_AV_INIT_REQ_EVT,
                 (char*)&service_id, sizeof(int), NULL);
 ```
-后面的笔记会来分析 bluedroid 中线程及消息的处理， 这里不再详细分析其过程。 最终的处理是在  
+前面的笔记有分析 bluedroid 中线程及消息的处理， 这里不再详细分析其过程。 最终的处理是在  
 
 ```c
 static void btif_av_handle_event(UINT16 event, char* p_param)

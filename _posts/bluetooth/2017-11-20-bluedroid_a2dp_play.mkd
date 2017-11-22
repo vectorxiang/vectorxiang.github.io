@@ -1,0 +1,761 @@
+---
+layout: post
+title:  "Alarm in Bluedroid & Bluetooth 之 bluedroid A2DP Play"
+date:   2017-11-20
+categories: [bluetooth]
+tags: Bluetooth
+catalog: true
+---
+# 1. Alarm in Bluedroid
+bluedroid 中采用了 POSIX 定时器, 其主要函数有3个 
+```c
+/* 创建定时器
+*  clock_id ：基于哪一种时钟，取值为 CLOCK_REALTIME ，CLOCK_MONOTONIC 等等
+*  evp ：包含定时到期时的信号内型及 callback 函数指针等
+*  timerid ：将指向创建好的定时器ID
+*/
+int timer_create(clockid_t clock_id, struct sigevent *evp, timer_t *timerid)
+
+/*  负责启动或停止timer_create创建的定时器
+*  timerid ： 上面获取到的定时器ID
+*  flags ： 说明定时器使用的是相对时间还是绝对时间
+*  value ： 设置timerid指定的定时器时间, 其中 it_interval 为周期的时间
+*/
+int timer_settime(timer_t timerid, int flags, const struct itimerspec *value, struct itimerspect *ovalue);
+``` 
+bluedroid 中定时器相关的函数都在 alarm.c 中实现， 下面根据 alarm.h 中申明的几个函数来看是怎样使用的。
+
+### alarm_new
+在使用时首先创建 alarm , 
+```c
+// 创建一个 one-time off alarm
+alarm_t *alarm_new(const char *name) {
+  return alarm_new_internal(name, false);
+}
+
+// 创建一个  periodic alarm
+alarm_t *alarm_new_periodic(const char *name) {
+  return alarm_new_internal(name, true);
+}
+
+static alarm_t *alarm_new_internal(const char *name, bool is_periodic) {
+  // alarms 不存在时调用 lazy_initialize 来初始化
+  if (!alarms && !lazy_initialize()) {
+    assert(false); // if initialization failed, we should not continue
+    return NULL;
+  }
+   ......  //稍后在来追下面的内容
+}
+```
+先来看 lazy_initialize ，回头在来看 alarm_new_internal 后面的处理
+```c
+static bool lazy_initialize(void) {
+  bool timer_initialized = false;
+  bool wakeup_timer_initialized = false;
+  
+  //创建一个 list_t ，由alarms 指向他
+  alarms = list_new(NULL);
+
+  // 创建 timer 定时器
+  if (!timer_create_internal(CLOCK_ID, &timer))
+    ===>  static bool timer_create_internal(const clockid_t clock_id, timer_t *timer) {
+		  struct sigevent sigevent;
+		  sigevent.sigev_notify = SIGEV_THREAD;
+		  // 处理函数都是 timer_callback
+		  sigevent.sigev_notify_function = (void (*)(union sigval))timer_callback;
+		  if (timer_create(clock_id, &sigevent, timer) == -1) {
+		    ......
+		    return false;
+		  }
+
+		  return true;
+		}
+    goto error;
+  timer_initialized = true;
+
+  // 创建 wakeup_timer 定时器
+  if (!timer_create_internal(CLOCK_ID_ALARM, &wakeup_timer))
+    goto error;
+  wakeup_timer_initialized = true;
+
+  alarm_expired = semaphore_new(0);
+
+  // 创建工作线程 default_callback_thread
+  default_callback_thread = thread_new_sized("alarm_default_callbacks",
+                                             SIZE_MAX);
+  // 设定高优先级 (-19)
+  thread_set_priority(default_callback_thread, CALLBACK_THREAD_PRIORITY_HIGH);
+  
+  /* 创建消息对立 default_callback_queue ，将其由default_callback_thread 来处理
+      alarm_register_processing_queue 中设定最后的处理函数为 alarm_register_processing_queue */
+  default_callback_queue = fixed_queue_new(SIZE_MAX);
+  alarm_register_processing_queue(default_callback_queue,
+                                  default_callback_thread);
+
+  dispatcher_thread_active = true;
+  dispatcher_thread = thread_new("alarm_dispatcher");
+
+  thread_set_priority(dispatcher_thread, CALLBACK_THREAD_PRIORITY_HIGH);
+  // 关键函数，运行 callback_dispatch ， 处理定时器到期
+  thread_post(dispatcher_thread, callback_dispatch, NULL);
+  return true;
+  ...... // error 处理
+}
+```
+这里创建了一个 list_t 指针alarms , 两个定时器 timer 和 wakeup_timer ， 另外创建了两个工作线程 default_callback_thread 和 
+dispatcher_thread 。   其中 dispatcher_thread 运行 callback_dispatch ， 功能是定时器到期的处理，后面再来看他的代码。
+
+再来继续看 alarm_new_internal   
+```c
+static alarm_t *alarm_new_internal(const char *name, bool is_periodic) {
+  if (!alarms && !lazy_initialize()) {
+    assert(false); // if initialization failed, we should not continue
+    return NULL;
+  }
+
+  pthread_mutexattr_t attr;
+  pthread_mutexattr_init(&attr);
+
+  alarm_t *ret = osi_calloc(sizeof(alarm_t));
+
+  // Make this a recursive mutex to make it safe to call |alarm_cancel| from
+  // within the callback function of the alarm.
+  int error = pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+
+  error = pthread_mutex_init(&ret->callback_lock, &attr);
+  
+  // alarm_new 这里为 false , alarm_new_periodic 这里为 true
+  ret->is_periodic = is_periodic;
+
+  // 保存新创建的 alarm_t 中 stats->name
+  alarm_stats_t *stats = &ret->stats;
+  stats->name = osi_strdup(name);
+  // NOTE: The stats were reset by osi_calloc() above
+
+  pthread_mutexattr_destroy(&attr);
+  return ret;
+}
+```
+### alarm_set
+接下来设定并启动定时器 , 其中 alarm 为上面新建的 alarm_t 结构体
+```c
+void alarm_set(alarm_t *alarm, period_ms_t interval_ms,
+               alarm_callback_t cb, void *data) {
+  alarm_set_on_queue(alarm, interval_ms, cb, data, default_callback_queue);
+}
+
+void alarm_set_on_queue(alarm_t *alarm, period_ms_t interval_ms,
+                        alarm_callback_t cb, void *data,
+                        fixed_queue_t *queue) {
+  assert(queue != NULL);
+  alarm_set_internal(alarm, interval_ms, cb, data, queue);
+}
+```
+```c
+static void alarm_set_internal(alarm_t *alarm, period_ms_t period,
+                               alarm_callback_t cb, void *data,
+                               fixed_queue_t *queue) {
+  pthread_mutex_lock(&monitor);
+
+  // 初始化 alarm 中的其他变量
+  alarm->creation_time = now();
+  alarm->period = period;
+  alarm->queue = queue;
+  alarm->callback = cb;
+  alarm->data = data;
+
+  schedule_next_instance(alarm);
+  alarm->stats.scheduled_count++;
+
+  pthread_mutex_unlock(&monitor);
+}
+```
+关键函数 schedule_next_instance ：   
+```c
+static void schedule_next_instance(alarm_t *alarm) {
+  /* alarms 根据deadline 的时间排序（earliest deadline first）
+  如果该 alarm 就是当前 alarms list 的第一个节点则需要 re-schedule */
+  bool needs_reschedule = (!list_is_empty(alarms) && list_front(alarms) == alarm);
+  if (alarm->callback)
+    remove_pending_alarm(alarm);
+
+  // 计算这个 alarm 的下一个触发时间点 deadline
+  period_ms_t just_now = now();
+  period_ms_t ms_into_period = 0;
+  if ((alarm->is_periodic) && (alarm->period != 0))
+    ms_into_period = ((just_now - alarm->creation_time) % alarm->period);
+  alarm->deadline = just_now + (alarm->period - ms_into_period);
+
+  // 根据 deadline 将alarm 插入 alarms 链表
+  if (list_is_empty(alarms) ||
+      ((alarm_t *)list_front(alarms))->deadline > alarm->deadline) {
+    list_prepend(alarms, alarm);
+  } else {
+    for (list_node_t *node = list_begin(alarms); node != list_end(alarms); node = list_next(node)) {
+      list_node_t *next = list_next(node);
+      if (next == list_end(alarms) || ((alarm_t *)list_node(next))->deadline > alarm->deadline) {
+        list_insert_after(alarms, node, alarm);
+        break;
+      }
+    }
+  }
+
+  // 重新设置定时器
+  if (needs_reschedule ||
+      (!list_is_empty(alarms) && list_front(alarms) == alarm)) {
+    reschedule_root_alarm();
+  }
+}
+```
+```c
+static void reschedule_root_alarm(void) {
+
+  const bool timer_was_set = timer_set;
+
+  // If used in a zeroed state, disarms the timer.
+  struct itimerspec timer_time;
+  memset(&timer_time, 0, sizeof(timer_time));
+
+  const alarm_t *next = list_front(alarms);
+  const int64_t next_expiration = next->deadline - now();
+  
+  // 如果距离最近的触发时间小于 3s 需先申请 wakelock
+  if (next_expiration < TIMER_INTERVAL_FOR_WAKELOCK_IN_MS) {
+    if (!timer_set) {
+      if (!wakelock_acquire()) {
+        LOG_ERROR(LOG_TAG, "%s unable to acquire wake lock", __func__);
+        goto done;
+      }
+    }
+
+    timer_time.it_value.tv_sec = (next->deadline / 1000);
+    timer_time.it_value.tv_nsec = (next->deadline % 1000) * 1000000LL;
+
+    struct itimerspec end_of_time;
+    memset(&end_of_time, 0, sizeof(end_of_time));
+    end_of_time.it_value.tv_sec = (time_t)(1LL << (sizeof(time_t) * 8 - 2));
+    timer_settime(wakeup_timer, TIMER_ABSTIME, &end_of_time, NULL);
+  } else {		//当触发时间大于 3s
+    struct itimerspec wakeup_time;
+    memset(&wakeup_time, 0, sizeof(wakeup_time));
+    wakeup_time.it_value.tv_sec = (next->deadline / 1000);
+    wakeup_time.it_value.tv_nsec = (next->deadline % 1000) * 1000000LL;
+    // 设定 wakeup_timer 的触发时间
+    if (timer_settime(wakeup_timer, TIMER_ABSTIME, &wakeup_time, NULL) == -1)
+      LOG_ERROR(LOG_TAG, "%s unable to set wakeup timer: %s",
+                __func__, strerror(errno));
+  }
+
+done:
+  // 不需要申请 wakelock
+  timer_set = timer_time.it_value.tv_sec != 0 || timer_time.it_value.tv_nsec != 0;
+  if (timer_was_set && !timer_set) {
+    wakelock_release();
+  }
+
+  // 设定 timer 的超时时间
+  if (timer_settime(timer, TIMER_ABSTIME, &timer_time, NULL) == -1)
+    LOG_ERROR(LOG_TAG, "%s unable to set timer: %s", __func__, strerror(errno));
+
+  if (timer_set) {
+    struct itimerspec time_to_expire;
+    timer_gettime(timer, &time_to_expire);
+    if (time_to_expire.it_value.tv_sec == 0 &&
+        time_to_expire.it_value.tv_nsec == 0) {
+      LOG_DEBUG(LOG_TAG, "%s alarm expiration too close for posix timers, switching to guns", __func__);
+      semaphore_post(alarm_expired);
+    }
+  }
+}
+```
+总结: 将 alarm_new 创建的 alarm_t 结构体按照 deadline 的先后加入到 alarms 链表，  如果该结构体的时间需要最先触发，则重新设定定时器， 这里有一个判断， 当触发时间小于3s 时直接设定到 wakeup_timer , 否这设定到 timer .
+
+如果触发时间是在 alarms 的最前面， 则已经设定好了wakeup_timer 或者 timer， 他们的处理函数都是 timer_callback
+```c
+static void timer_callback(UNUSED_ATTR void *ptr) {
+  semaphore_post(alarm_expired);
+}
+```
+接下来需要看 alarm_expired 的处理， 也正是 timer 到期真正处理的位置 
+
+### callback_dispatch
+```c
+static void callback_dispatch(UNUSED_ATTR void *context) {
+  while (true) {
+    // 等待alarm_expired 的可读事件，效果同信号量
+    semaphore_wait(alarm_expired);
+
+    pthread_mutex_lock(&monitor);
+    alarm_t *alarm;
+
+    // 当 alarms 的最近 deadline 还没到时重新设定定时器
+    if (list_is_empty(alarms) ||
+        (alarm = list_front(alarms))->deadline > now()) {
+      reschedule_root_alarm();
+      pthread_mutex_unlock(&monitor);
+      continue;
+    }
+
+    // 最近的 deadline 已到期，移除
+    list_remove(alarms, alarm);
+
+    // 如果是周期定时器则重新计算 deadline 并插入 alarms ，其stats.rescheduled_count 加1
+    if (alarm->is_periodic) {
+      alarm->prev_deadline = alarm->deadline;
+      schedule_next_instance(alarm);
+      alarm->stats.rescheduled_count++;
+    }
+    // 重新根据alarms 首结点设置定时器
+    reschedule_root_alarm();
+
+    // 处理 alarm 到期，其中调用 alarm 中的 callback 函数
+    fixed_queue_enqueue(alarm->queue, alarm);
+
+    pthread_mutex_unlock(&monitor);
+  }
+```
+到此 bluedroid 中的 alarm 分析基本结束。 总结起来流程比较简单 ： 每个定时设置以 alarm_t 结构体的形式存在， alarms 中会根据触发时间的顺序保存这些结构体， 此外会在定时器中设定alarms 首结点 （最先触发）的时间， 到期之后由 dispatcher_thread 取出首结点处理，下一个结点变为首结点，重新设置定时器。
+
+# 2. A2DP Play
+Android framework 定义了两个 hardware interfaces 用来操作audio output devices ：  audio_hw_device_t 和 audio_stream_out_t 。    
+
+AudioFlinger 是这些 interfaces 的唯一使用者 。Bluedroid在 *system/bt/audio_a2dp_hw/audio_a2dp_hw.c* 实现了这两个interface 。   
+```c
+static struct hw_module_methods_t hal_module_methods = {
+    .open = adev_open,
+};
+ 
+static int adev_open(const hw_module_t* module, const char* name,
+                     hw_device_t** device)
+{
+    struct a2dp_audio_device *adev;
+    adev = calloc(1, sizeof(struct a2dp_audio_device));
+  
+    adev->device.common.tag = HARDWARE_DEVICE_TAG;
+    adev->device.common.version = AUDIO_DEVICE_API_VERSION_2_0;
+    adev->device.common.module = (struct hw_module_t *) module;
+    adev->device.common.close = adev_close;
+  
+    adev->device.init_check = adev_init_check;
+    adev->device.set_voice_volume = adev_set_voice_volume;
+    adev->device.set_master_volume = adev_set_master_volume;
+    adev->device.set_mode = adev_set_mode;
+    adev->device.set_mic_mute = adev_set_mic_mute;
+    adev->device.get_mic_mute = adev_get_mic_mute;
+    adev->device.set_parameters = adev_set_parameters;
+    adev->device.get_parameters = adev_get_parameters;
+    adev->device.get_input_buffer_size = adev_get_input_buffer_size;
+    adev->device.open_output_stream = adev_open_output_stream;
+    adev->device.close_output_stream = adev_close_output_stream;
+    adev->device.open_input_stream = adev_open_input_stream;
+    adev->device.close_input_stream = adev_close_input_stream;
+    adev->device.dump = adev_dump;
+    adev->output = NULL;
+  
+    *device = &adev->device.common;
+  
+    return 0;
+}
+  
+static int adev_open_output_stream(struct audio_hw_device *dev,
+                                   audio_io_handle_t handle,
+                                   audio_devices_t devices,
+                                   audio_output_flags_t flags,
+                                   struct audio_config *config,
+                                   struct audio_stream_out **stream_out,
+                                   const char *address __unused)
+  
+{
+    struct a2dp_stream_out *out;
+    out = (struct a2dp_stream_out *)calloc(1, sizeof(struct a2dp_stream_out));
+  
+    out->stream.common.get_sample_rate = out_get_sample_rate;
+    out->stream.common.set_sample_rate = out_set_sample_rate;
+    out->stream.common.get_buffer_size = out_get_buffer_size;
+    out->stream.common.get_channels = out_get_channels;
+    out->stream.common.get_format = out_get_format;
+    out->stream.common.set_format = out_set_format;
+    out->stream.common.standby = out_standby;
+    out->stream.common.dump = out_dump;
+    out->stream.common.set_parameters = out_set_parameters;
+    out->stream.common.get_parameters = out_get_parameters;
+    out->stream.common.add_audio_effect = out_add_audio_effect;
+    out->stream.common.remove_audio_effect = out_remove_audio_effect;
+    out->stream.get_latency = out_get_latency;
+    out->stream.set_volume = out_set_volume;
+    out->stream.write = out_write;
+    out->stream.get_render_position = out_get_render_position;
+  
+    /* initialize a2dp specifics */
+    a2dp_stream_common_init(&out->common);
+  
+    out->common.cfg.channel_flags = AUDIO_STREAM_DEFAULT_CHANNEL_FLAG;
+    out->common.cfg.format = AUDIO_STREAM_DEFAULT_FORMAT;
+    out->common.cfg.rate = AUDIO_STREAM_DEFAULT_RATE;
+    ......
+    *stream_out = &out->stream;
+}
+```
+
+当 A2DP 连接好之后， A2dpStateMachine 发送 broadcast 通知 A2DP 状态变化， audio 会收到该通知之后首先调用 open_output_stream 接口， 其中会连接 bluedroid 的 ctrl socket :   
+```c
+static int adev_open_output_stream(struct audio_hw_device *dev,
+                                   audio_io_handle_t handle,
+                                   audio_devices_t devices,
+                                   audio_output_flags_t flags,
+                                   struct audio_config *config,
+                                   struct audio_stream_out **stream_out,
+                                   const char *address __unused)
+  
+{
+	// 如上， 初始化 audio_stream_out_t 接口
+	......
+
+	// 初始化 out->common , 其中 state 初始状态为 AUDIO_A2DP_STATE_STOPPED
+	a2dp_stream_common_init(&out->common);
+
+	/*  连接 bluedroid ctrl socket , 在连接之后发送 A2DP_CTRL_CMD_CHECK_READY ，
+	     bluedroid 做出相应检查并确定 state 为 opened 时返回 SUCCESS ACK，ctrl fd 将保存在out->common中 */
+	a2dp_open_ctrl_path(&out->common);
+	
+	if (a2dp_command(&out->common, A2DP_CTRL_CMD_OFFLOAD_NOT_SUPPORTED) == 0) {
+	DEBUG("Streaming mode set successfully");
+	}
+
+	/* 为保证在连接上之后立刻播放时耳机处于正确的状态需要 delay */
+	usleep(250000);
+	return 0;
+}
+```
+先来看一下 a2dp_open_ctrl_path 的参数 &out->common :
+```c
+out = (struct a2dp_stream_out *)calloc(1, sizeof(struct a2dp_stream_out));
+
+struct a2dp_stream_out {
+    struct audio_stream_out stream;
+    struct a2dp_stream_common common;	//保存a2dp相关状态及与bluedroid连接fd
+    uint64_t frames_presented; // frames written, never reset
+    uint64_t frames_rendered;  // frames written, reset on standby
+};
+
+struct a2dp_stream_common {
+    pthread_mutex_t         lock;
+    int                     ctrl_fd;	//连接bluedroid ctrl fd
+    int                     audio_fd;	//连接bluedroid data fd
+    size_t                  buffer_sz;
+    struct a2dp_config      cfg;
+    a2dp_state_t            state;	//a2dp 状态
+    uint8_t                 codec_cfg[MAX_CODEC_CFG_SIZE];
+};
+```
+其中 a2dp_state_t 包含以下几种状态  
+```c
+typedef enum {
+    AUDIO_A2DP_STATE_STARTING,
+    AUDIO_A2DP_STATE_STARTED,
+    AUDIO_A2DP_STATE_STOPPING,
+    AUDIO_A2DP_STATE_STOPPED,
+    AUDIO_A2DP_STATE_SUSPENDED, /* need explicit set param call to resume (suspend=false) */
+    AUDIO_A2DP_STATE_STANDBY    /* allows write to autoresume */
+} a2dp_state_t;
+```
+下面来看开始播放音乐的流程 ， 在开始播放时 audio 直接调用 audio_stream_out_t 的 write 接口 :
+```c
+static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
+                         size_t bytes)
+{
+    struct a2dp_stream_out *out = (struct a2dp_stream_out *)stream;
+    int sent = -1;
+    #ifdef BT_AUDIO_SYSTRACE_LOG
+    char trace_buf[512];
+    #endif
+
+    DEBUG("write %zu bytes (fd %d)", bytes, out->common.audio_fd);
+
+    pthread_mutex_lock(&out->common.lock);
+
+    /* only allow autostarting if we are in stopped or standby */
+    if ((out->common.state == AUDIO_A2DP_STATE_STOPPED) ||
+        (out->common.state == AUDIO_A2DP_STATE_STANDBY))
+    {
+        if (start_audio_datapath(&out->common) < 0)
+        {
+            goto finish;
+        }
+    }
+```
+当前状态为 AUDIO_A2DP_STATE_STOPPED , 所以会先连接 bluedroid data socket  : 
+```c
+static int start_audio_datapath(struct a2dp_stream_common *common)
+{
+    INFO("state %d", common->state);
+
+    #ifdef BT_AUDIO_SYSTRACE_LOG
+    char trace_buf[512];
+    #endif
+
+    INFO("state %s", dump_a2dp_hal_state(common->state));
+
+    int oldstate = common->state;
+    common->state = AUDIO_A2DP_STATE_STARTING;
+
+    // 通过 ctrl socket 发送 A2DP_CTRL_CMD_START 并等待 ACK
+    int a2dp_status = a2dp_command(common, A2DP_CTRL_CMD_START);
+
+    if (a2dp_status < 0)
+    {
+        ERROR("Audiopath start failed (status %d)", a2dp_status);
+        goto error;
+    }
+    else if (a2dp_status == A2DP_CTRL_ACK_INCALL_FAILURE)
+    {
+        ERROR("Audiopath start failed - in call, move to suspended");
+        goto error;
+    }
+
+
+    /* 连接 data socket */
+    if (common->audio_fd == AUDIO_SKT_DISCONNECTED)
+    {
+        common->audio_fd = skt_connect(A2DP_DATA_PATH, common->buffer_sz);
+        common->state = AUDIO_A2DP_STATE_STARTED;
+    }
+
+    return 0;
+}
+```
+### A2DP_CTRL_CMD_START
+先来看 bluedroid 收到 A2DP_CTRL_CMD_START 之后的处理  
+```c
+static void btif_recv_ctrl_data(void)
+{
+        case A2DP_CTRL_CMD_START:
+            /* 在 HFP 电话过程时，不会 start stream .
+               Some headsets like the Sony MW600, don't allow AVDTP START
+               in call and respond BAD_STATE. */
+            if (!btif_hf_is_call_idle())
+            {
+                a2dp_cmd_acknowledge(A2DP_CTRL_ACK_INCALL_FAILURE);
+                break;
+            }
+
+	    // 检查当前 state 为opened ，且 flag 不为 remote suspend 等等
+            if (btif_av_stream_ready() == TRUE)
+            {
+                /* 创建 data socket 并监听 */
+                UIPC_Open(UIPC_CH_ID_AV_AUDIO, btif_a2dp_data_cb);
+
+                /* post start event and wait for audio path to open */
+                btif_dispatch_sm_event(BTIF_AV_START_STREAM_REQ_EVT, NULL, 0);
+            }
+            // 状态为 started , 同时检查 flag
+            else if (btif_av_stream_started_ready())
+            {
+                /* 只需创建 data socket */
+                UIPC_Open(UIPC_CH_ID_AV_AUDIO, btif_a2dp_data_cb);
+
+                a2dp_cmd_acknowledge(A2DP_CTRL_ACK_SUCCESS);
+            }
+            else
+            {
+                APPL_TRACE_WARNING("%s: A2DP command %s while AV stream is not ready",
+                                   __func__, dump_a2dp_ctrl_event(cmd));
+                a2dp_cmd_acknowledge(A2DP_CTRL_ACK_FAILURE);
+                break;
+            }
+            break;
+```
+这里 BTIF_AV_START_STREAM_REQ_EVT 最后会交给 opened 或者 started 的 handler 来处理 ，主要来看一下 opened 状态下的处理 :
+```c
+static BOOLEAN btif_av_state_opened_handler(btif_sm_event_t event, void *p_data, int index)
+{
+        case BTIF_AV_START_STREAM_REQ_EVT:
+            if (btif_av_cb.peer_sep != AVDT_TSEP_SRC)
+                btif_a2dp_setup_codec();
+            BTA_AvStart();
+            btif_av_cb.flags |= BTIF_AV_FLAG_PENDING_START;
+            break;
+```
+下面的流程基本和 A2DP 之前发送 command 一样 ：
+```c
+static const UINT8 bta_av_sst_open[][BTA_AV_NUM_COLS] =
+{
+/* AP_START_EVT */          {BTA_AV_DO_START,       BTA_AV_SIGNORE,        BTA_AV_OPEN_SST },
+```
+发送 STREAM START 的 command 给 headset , 状态仍处于 open . 在收到 headset 相应 SUCCESS 的消息之后  
+> 07-09 10:38:29.222  5024 11912 D bt-btif : bta_av_stream0_cback avdt_handle: 2 event=0x5
+07-09 10:38:29.227  5024 11912 D bt-btif : AV Sevent(0x41)=0x121c(STR_START_OK) state=3(OPEN)
+07-09 10:38:29.227  5024 11912 D bt-btif : bta_av_start_ok wait:x0, role:x10    
+
+这里 event 5 就是start stream 的 comfirm : 
+```c
+void bta_av_start_ok (tBTA_AV_SCB *p_scb, tBTA_AV_DATA *p_data)
+{
+    ......
+     (*bta_av_cb.p_cback)(BTA_AV_START_EVT, (tBTA_AV *) &start);
+```
+最后会回到 btif av opened 的 handler 来处理: 
+```c
+static BOOLEAN btif_av_state_opened_handler(btif_sm_event_t event, void *p_data)
+{
+       
+        case BTA_AV_START_EVT:
+        {
+            if (btif_av_cb.flags & BTIF_AV_FLAG_PENDING_START) {
+                if (btif_av_cb.peer_sep == AVDT_TSEP_SNK)
+                    //给 audio 发送 success ack 
+                    btif_a2dp_on_started(NULL, TRUE);
+            }
+            //sm handler切换到 started，
+            btif_sm_change_state(btif_av_cb.sm_handle, BTIF_AV_STATE_STARTED);
+    
+        } break;
+``` 
+状态机在切换到 started 之后会通知 A2dpStateMachine 状态 BTAV_AUDIO_STATE_STARTED , 上层切换 audio 状态为 playing .
+
+### A2DP_DATA_PATH
+headset 回复 start stream success 之后， bluedroid 回复 success ack 给audio ， 接下来 audio 开始连接 data socket . bluedroid 中监听 data socket 的函数为 btif_a2dp_data_cb  , 当连接建立时会传入 UIPC_OPEN_EVT 
+```c
+static void btif_a2dp_data_cb(tUIPC_CH_ID ch_id, tUIPC_EVENT event)
+{
+        case UIPC_OPEN_EVT:
+
+            /*  read directly from media task from here on (keep callback for
+                connection events */
+            UIPC_Ioctl(UIPC_CH_ID_AV_AUDIO, UIPC_REG_REMOVE_ACTIVE_READSET, NULL);
+            UIPC_Ioctl(UIPC_CH_ID_AV_AUDIO, UIPC_SET_READ_POLL_TMO,
+                       (void *)A2DP_DATA_READ_POLL_MS);
+
+            if (btif_media_cb.peer_sep == AVDT_TSEP_SNK) {
+                /* 初始化 encoder */
+                btif_dispatch_sm_event(BTIF_AV_UPDATE_ENCODER_REQ_EVT, NULL, 0);
+            }
+            btif_media_cb.data_channel_open = TRUE;
+
+            break;
+```
+此时 btif av 状态机处于 started 状态 : 
+```c
+static BOOLEAN btif_av_state_started_handler(btif_sm_event_t event, void *p_data, int index)
+{
+        case BTIF_AV_UPDATE_ENCODER_REQ_EVT:
+            btif_a2dp_update_codec();
+            break;
+}
+
+void btif_a2dp_update_codec(void)
+{
+    APPL_TRACE_DEBUG("## A2DP UPDATE CODEC ##");
+    mutex_global_lock();
+    btif_media_task_start_aa_req();
+    btif_a2dp_encoder_update();
+    mutex_global_unlock();
+}
+```
+### btif_media_task_start_aa_req
+```c
+BOOLEAN btif_media_task_start_aa_req(void)
+{
+    BT_HDR *p_buf = osi_malloc(sizeof(BT_HDR));
+
+    p_buf->event = BTIF_MEDIA_START_AA_TX;
+    fixed_queue_enqueue(btif_media_cmd_msg_queue, p_buf);
+
+    return TRUE;
+}
+```
+将消息放入 btif_media_cmd_msg_queue ， 来看一下该消息队列的处理 
+```c
+static void btif_media_thread_handle_cmd(fixed_queue_t *queue, UNUSED_ATTR void *context)
+{
+    switch (p_msg->event)
+    {
+    case BTIF_MEDIA_START_AA_TX:
+        btif_media_task_aa_start_tx();
+        break;
+    case BTIF_MEDIA_STOP_AA_TX:
+        btif_media_task_aa_stop_tx();
+        break;
+     }
+}
+
+static void btif_media_task_aa_start_tx(void)
+{
+    APPL_TRACE_DEBUG("%s media_alarm %srunning, feeding mode %d", __func__,
+                     alarm_is_scheduled(btif_media_cb.media_alarm)? "" : "not ",
+                     btif_media_cb.feeding_mode);
+
+    last_frame_us = 0;
+
+    ...... // reset some value
+
+    // 创建周期定时任务
+    btif_media_cb.media_alarm = alarm_new_periodic("btif.media_task");
+
+    // 开始 20ms 的定时器，处理函数是 btif_media_task_alarm_cb
+    alarm_set(btif_media_cb.media_alarm, BTIF_MEDIA_TIME_TICK,
+              btif_media_task_alarm_cb, NULL);
+}
+
+static void btif_media_task_alarm_cb(UNUSED_ATTR void *context) {
+  thread_post(worker_thread, btif_media_task_aa_handle_timer, NULL);
+  	===> btif_media_send_aa_frame(timestamp_us);   // 开始编码并发出data
+}
+```
+回头继续来看 audio 中发送数据 out_write 
+```c
+static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
+                         size_t bytes)
+{
+    ......
+    if ((out->common.state == AUDIO_A2DP_STATE_STOPPED) ||
+        (out->common.state == AUDIO_A2DP_STATE_STANDBY))
+    {
+        if (start_audio_datapath(&out->common) < 0)
+        {
+            goto finish;
+        }
+    }
+    // 连接 data socket 之后
+    pthread_mutex_unlock(&out->common.lock);
+    
+    // 其中以间隔 20ms 发送
+    sent = skt_write(out->common.audio_fd, buffer,  bytes);
+    pthread_mutex_lock(&out->common.lock);
+
+finish: ;
+    ......
+    return bytes;
+}    
+```
+bluedroid 中哪里会来从 data socket 读取这些数据呢 ？ 直接搜索可以找到 btif_media_aa_read_feeding 会来读取， 而调用该函数的位置正是在 btif_media_send_aa_frame ： 
+```c
+static void btif_media_send_aa_frame(uint64_t timestamp_us)
+{
+    UINT8 nb_frame_2_send = 0;
+    UINT8 nb_iterations = 0;
+
+    // 从 data socket 中取出相应的数据
+    btif_get_num_aa_frame_iteration(&nb_iterations, &nb_frame_2_send);
+    ==> btif_media_aa_prep_sbc_2_send
+    	===> btif_media_aa_read_feeding(UIPC_CH_ID_AV_AUDIO)
+    		====> 
+
+    /* get the number of frame to send */
+    if (nb_frame_2_send != 0) {
+        for (UINT8 counter = 0; counter < nb_iterations; counter++)
+        {
+            /* 重新编码这些数据 */
+            btif_media_aa_prep_2_send(nb_frame_2_send, timestamp_us);
+        }
+    }
+
+    /* 发送*/
+    bta_av_ci_src_data_ready(BTA_AV_CHNL_AUDIO);
+}
+```
+# 总结
+关于 A2DP data 的处理这里不再继续追了， 到这里 A2DP data 发送的流程基本结束 。 
+下图简单体现 audio 和 bluedroid 在A2DP 上的相关调用关系 :  
+![](/images/bluetooth/android_bluetooth_a2dp.png)
+
