@@ -1,0 +1,112 @@
+---
+layout: post
+title:  "Android Bluetooth HID"
+date:   2018-01-24
+categories: [bluetooth]
+tags: [Android Bluetooth]
+catalog: true
+---
+# 1. 概述
+HID (Human Interface Device) 定义了蓝牙在人机接口设备中的协议、特征和使用规程。典型的应用包括蓝牙鼠标、蓝牙键盘、蓝牙游戏手柄等。
+
+# 2. 协议略读
+HID 设备主要分为 Host 和 Device , 其基本通信方式如下图 :
+![](/images/bluetooth/bt_hid_transfer.png)
+
+## 2.1 HID Report
+Bluetooth HID devices 支持 3 种 report type : **Input** , **Output** 和 **Feature** . 其中 Input 和 Output report 包含低延迟的信息 ， 区别是 Input 为 device 发给 host 而 Output 为 host 发给device . Fearture 为双向包含一些非用户产生的信息。    
+
+HID 连接包含两条逻辑连接 ：**Control channel **和  **Interrupt Channel** ， 两个 channel 上都可以传输 reports ,  但是区别是 Control channel 上必须先发送  SET_REPORT / GET_REPORT request 才会传输 reports,  这种又被称为 "synchronous reports"  . 而在 Interrupt Channel 上则无须发送requset 和 acknowledg， 又被称为 "asynchronous reports"  .   
+
+*补充: HID Report Modes 分为两种 report protocol mode 和 boot protocol mode , 前者是所有 HID devices 的默认模式， host 端必须可以解析 report 。 而boot protocol mode 是针对一些小型的嵌入式系统设置， host 端并不会包含 report 的解析器 。*
+
+## 2.2 Bluetooth HID Protocol Message
+HID 数据传输直接基于 L2CAP 之上 ， 起数据结构为 :   
+![](/images/bluetooth/bt_hid_header.png)
+其中 type 的定义为 :  
+![](/images/bluetooth/bt_hid_header_type_1.png)
+
+## 2.3 Disconnect
+连接流程和其他 profile 流程差不多，只是如上所述回建立 control 和 interruput 两个逻辑连接 。   下面看一下 disconnect 流程 :
+![](/images/bluetooth/bt_hid_disconnect.png)
+本地用蓝牙鼠标试验看到 disconnect 其实并没有发送 VIRTUAL_CABLE_UNPLUG ， 而在鼠标断开连接之后移动鼠标时，鼠标会自动发起连接重新连起来。 而在解配对过程中是完全按照这个流程来走的， 并会删除 link key , 一般鼠标不会在发起连接。
+
+# 3. Android HID 
+HID service 和其他profile 差不多在 enable BT 时完成启动和初始化，这里不再分析。 这里只关注 device 连接之后 : 
+![](/images/bluetooth/bt_hid_connect_snoop.png)
+首先已配对鼠标发起 ACL 连接请求，DUT接受请求。省略中间的连接细节，在 HID_Control 和 HID_Interrupt 都连接好之后 
+![](/images/bluetooth/bt_hid_connected_snoop.png)
+
+下面来看一下连接ok 之后的 log 及 对应的 code : 
+	// LOG
+	bt-btif : bta_hh_open_act:  Device[0] connected
+	bt-btif : bta_hh_sm_execute: State 0x02 [BTA_HH_W4_CONN_ST], Event [BTA_HH_OPEN_CMPL_EVT]
+	bt-btif : bta_hh_co_open: Found an existing device with the same handle dev_status = 2
+
+```c
+void bta_hh_open_cmpl_act(tBTA_HH_DEV_CB *p_cb, tBTA_HH_DATA *p_data)
+{
+    ......
+    /* initialize device driver */
+    bta_hh_co_open(p_cb->hid_handle, p_cb->sub_class, p_cb->attr_mask,  p_cb->app_id);
+    
+void bta_hh_co_open(UINT8 dev_handle, UINT8 sub_class, tBTA_HH_ATTR_MASK attr_mask,
+                    UINT8 app_id)
+{
+    ......
+     p_dev = &btif_hh_cb.devices[i]
+    p_dev->fd = open(dev_path, O_RDWR | O_CLOEXEC);    // 打开/dev/uhid
+            p_dev->hh_keep_polling = 1;
+            p_dev->hh_poll_thread_id = create_thread(btif_hh_poll_event_thread, p_dev);    //创建线程监听uinput driver 上传的事件
+    p_dev->dev_status = BTHH_CONN_STATE_CONNECTED;    
+```
+	//LOG
+	bt-btif : bta_hh_sm_execute: State 0x03 [BTA_HH_CONN_ST], Event [BTA_HH_API_GET_DSCP_EVT]
+	bt-btif : btif_hh_upstreams_evt: event=BTA_HH_GET_DSCP_EVT
+	bt-btif : bta_hh_co_send_hid_info: fd = 90, name = [Microsoft Sculpt Comfort Mouse], dscp_len = 352
+	bt-btif : bta_hh_co_send_hid_info: vendor_id = 0x045e, product_id = 0x07a2, version= 0x0129,ctry_code=0x21
+
+```c
+void bta_hh_co_send_hid_info(btif_hh_device_t *p_dev, char *dev_name, UINT16 vendor_id,
+                             UINT16 product_id, UINT16 version, UINT8 ctry_code,
+                             int dscp_len, UINT8 *p_dscp)
+{
+    //创建 uinput device
+    ev.type = UHID_CREATE;
+    strncpy((char*)ev.u.create.name, dev_name, sizeof(ev.u.create.name) - 1);
+    ev.u.create.bus = BUS_BLUETOOTH;
+    ev.u.create.vendor = vendor_id;
+    ev.u.create.product = product_id;
+    ...
+    result = uhid_write(p_dev->fd, &ev);
+```
+
+	bt-btif : UHID_START from uhid-dev
+	bt-btif : UHID_OPEN from uhid-dev
+到这里 uinput 设备就创建好了， 后面在收到 device 的 input report 时只需写入该 fd 即可 ：
+```c
+int bta_hh_co_write(int fd, UINT8* rpt, UINT16 len)
+{
+    APPL_TRACE_VERBOSE("bta_hh_co_data: UHID write");
+    struct uhid_event ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.type = UHID_INPUT;
+    ev.u.input.size = len;
+    memcpy(ev.u.input.data, rpt, len);
+    return uhid_write(fd, &ev);
+}
+```
+
+# 4. 相关debug
+查看当前input设备详细信息  ： **cat /proc/bus/input/devices**  , 其对应.kl文件应为 Vendor_<Vendor>_Product_<Product>.kl ,如果找不到那么根据 device name 来找，如果还是找不到则加载 Generic.kl 
+
+![](/images/bluetooth/bt_hid_debug_1.png)
+获取input设备event结点 : getevent
+
+![](/images/bluetooth/bt_hid_debug_2.png)
+这时候我要获取 Microsoft 这个设备的输入信息：
+
+![](/images/bluetooth/bt_hid_debug_3.png)
+这里会显示3列，分别对应 type ,code ,value .例如上面是一个鼠标的左键点击事件：      
+其中type 0001 (EV_KEY 按键事件) 0110代表按键值 , 最后的 1 和 0 分别对应 push 和 release 动作。
+
