@@ -1,0 +1,91 @@
+---
+layout: post
+title:  "Uinput"
+date:   2018-01-25
+categories: [android]
+tags: [android]
+catalog: true
+---
+uinput是Linux提供的一个可以在用户空间创建input设备的驱动程序。目前看到在Android 中蓝牙鼠标就是利用的 uinput 来发送key event .   
+
+kernel 中 uinput 的 init 代码如下：
+*/drivers/input/misc/uinput.c*
+```c
+static int __init uinput_init(void)
+{
+    return misc_register(&uinput_misc);
+}
+ 
+module_init(uinput_init);
+```
+uinput_init函数中，调用misc_register创建了一个混杂设备，所谓混杂设备本质上主设备号为10的一个字符设备，uinput_misc定义如下
+```c
+static struct miscdevice uinput_misc = {
+    .fops       = &uinput_fops,
+    .minor      = UINPUT_MINOR,
+    .name       = UINPUT_NAME,
+};
+ 
+static const struct file_operations uinput_fops = {
+    .owner      = THIS_MODULE,
+    .open       = uinput_open,
+    .release    = uinput_release,
+    .read       = uinput_read,
+    .write      = uinput_write,
+    .poll       = uinput_poll,
+    .unlocked_ioctl = uinput_ioctl,
+#ifdef CONFIG_COMPAT
+    .compat_ioctl   = uinput_compat_ioctl,
+#endif
+    .llseek     = no_llseek,
+};
+```
+
+先以蓝牙鼠标的代码为实例, 来看其实现流程 ：
+```c
+void bta_hh_co_open(UINT8 dev_handle, UINT8 sub_class, tBTA_HH_ATTR_MASK attr_mask,
+                    UINT8 app_id)
+{
+    ......
+    // 打开 ‘ /dev/uhid ’ 节点
+    p_dev->fd = open(dev_path, O_RDWR | O_CLOEXEC); 
+    //创建线程监听uinput driver 上传的事件， 其中会读取上面获取到的文件句柄
+    p_dev->hh_poll_thread_id = create_thread(btif_hh_poll_event_thread, p_dev); 
+}
+
+void bta_hh_co_send_hid_info(btif_hh_device_t *p_dev, char *dev_name, UINT16 vendor_id,
+                             UINT16 product_id, UINT16 version, UINT8 ctry_code,
+                             int dscp_len, UINT8 *p_dscp)
+{
+    struct uhid_event ev;
+    //创建 uinput device
+    ev.type = UHID_CREATE;
+    strncpy((char*)ev.u.create.name, dev_name, sizeof(ev.u.create.name) - 1);
+    ev.u.create.bus = BUS_BLUETOOTH;
+    ev.u.create.vendor = vendor_id;
+    ev.u.create.product = product_id;
+    ...
+    result = uhid_write(p_dev->fd, &ev);
+```
+可以看到这里首先打开 /dev/uhid 节点， 然后写入一个 type 为 UHID_CREATE 的 uhid_event 来创建uinput 设备 。  
+
+先来看一下该节点的 open 函数: 
+```c
+static int uinput_open(struct inode *inode, struct file *file)
+{
+    struct uinput_device *newdev;
+ 
+    newdev = kzalloc(sizeof(struct uinput_device), GFP_KERNEL);
+    mutex_init(&newdev->mutex);
+    spin_lock_init(&newdev->requests_lock);
+    init_waitqueue_head(&newdev->requests_waitq);
+    init_waitqueue_head(&newdev->waitq);
+    newdev->state = UIST_NEW_DEVICE;
+ 
+    file->private_data = newdev;
+    nonseekable_open(inode, file);
+ 
+    return 0;
+}
+```
+

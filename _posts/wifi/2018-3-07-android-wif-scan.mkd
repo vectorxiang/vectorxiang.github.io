@@ -1,0 +1,13 @@
+---
+layout: post
+title: "wifi 中的 循环扫描"
+category: wifi
+tags: [ wifi, android]
+catalog: true
+---
+记录一下 Android wifi 中的3种循环扫描 , 以下 code 从 Android O 中截取 :      
+
+# 1. PNO
+PNO (Preferred Network Offloading) 是在熄灭屏幕之后由 wifi firmware 自动扫描的机制 ， firmware 自动扫描已保存的 ap 在扫描到时唤醒 aCPU trigger 连线。 这样做的好处是更快的发现并连上 ap ，另外完全由 aCPU 来运行达到省电的目的。    
+
+ 

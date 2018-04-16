@@ -1,0 +1,46 @@
+---
+layout: post
+title:  "Android Bluetooth AVRCP"
+date:   2017-11-27****
+categories: [bluetooth]
+tags: [Android Bluetooth]
+catalog: true
+---
+# 1. 概述
+AVRCP（Audio/Video Remote Control Profile），即音频/视频远程控制规范。 AVRCP 定义了如何控制流媒体的特征和流程， 特征包括暂停、停止、启动重放、音量控制及其它类型的远程控制操作。   
+
+AVRCP 定义了两个角色:  **CT** (controller) 和 **TG** (target) ,  controller 发送操作命令 ， target 接收。 一般使用中手机作为 controller ， headset 作为 target 。
+
+AVRCP 基于 AVCTP 之上实现， AVCTP 定义了 command 和 response 的总体格式 ：
+![](/images/bluetooth/avrcp_architecture.png)
+以一个 command 和 response 为例 :
+![](/images/bluetooth/avrcp_architecture_example.png)
+
+以下列出作为 CT 和 TG 必须/选择 支持的 feature （一个设备可以同时支持 CT 和 TG） :
+![](/images/bluetooth/avrcp_feature_support.png)
+其中将设备分为了4种 :Player/Recorder , Monitor/Amplifier , Tuner , Menu ,  spec 规定至少支持其中一种， 一般耳机都会支持 Category 1 。 Spec 中有详细规定每一种设备类型支持的 feature ， 包括不应该支持和必须支持， option 。
+
+**Connection establishment**     
+一般连接请求由 CT 发起， 不过其实 TG 也是可以发起连接的。 当双方都支持 browsing (SDP中可知)时，在 control 连接建立好之后还会建立一条 browsing 连接。   
+
+**AV/C Command**     
+在连接建立好之后， CT 可以开始发送 AV/C command 给 TG ， TG 回复 response . 这里 AV/C command 包括以下几种 :  
+![](/images/bluetooth/avrcp_command_type.png)
+(因为没有完全理解，仅贴出英文介绍，避免翻译出现歧义)    
++ **The UNIT INFO command** is used to obtain information that pertains to the AV/C unit as a whole. The response frame includes information of the vendor ID of the TG and subunit type that best describes the unit. The information of vendor ID may be used to investigate the vendor of TG before using VENDOR DEPENDENT command.   
+ 
++ **The SUBUNIT INFO command** is used to obtain information about the subunit(s) of an AV/C unit. A device with this profile may support other subunits than the panel subunit if other profiles co-exist in the device, which can be found with the SUBUNIT INFO command. With this command, a typical AV/C controller manipulates AV/C function discovery.     
+
++ **The VENDOR DEPENDENT** command permits module vendors to specify their own set of commands and responses for AV/C units or subunits determined by the AV/C address that is contained in the AV/C frame.    
+
++ **The PASS THROUGH** command 为实际的 feature 控制命令 。   
+
+**注意:** AVRCP Browsing commands 并不属于以上 AV/C command ， 其直接基于 AVCTP 。
+
+这里不再关注具体的 AVRCP freature ，留待以后补充。 相关内容可以查询 AVRCP SPEC , 目前最新规范已经到了 1.6 。
+
+# 2. AVRCP in Android
+这里并不关注 AVRCP 的连接及相关 feature 的实现细节， 仅仅记录一下 Android 收到 AVRCP command 是如何分发处理的。  
+## 2.1 Android N
+
+
