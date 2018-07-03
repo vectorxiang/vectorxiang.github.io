@@ -1,0 +1,244 @@
+---
+layout: post
+title: "Android NFC 简单梳理"
+category: nfc
+tags: [ nfc, android]
+catalog: true
+---
+在 Android O 中NFC 主要有两个进程 : 
+![](/images/nfc/android_nfc_ps.png) 
+com.android.nfc 向上层app 提供 NFC 接口，另外负责分发各种 event ,  vendor.nxp.hardware.nfc@1.0-service 是 vendor 的 hidl service 。
+
+##  vendor.nxp.hardware.nfc@1.0-service 
+先来看一下 vendor.nxp.hardware.nfc@1.0-service 这个进程 ,  service 的code 位置在 *vendor/nxp/interfaces*  , service 定义在 rc 文件中 :
+```c
+service nqnfc_hal_service /vendor/bin/hw/vendor.nxp.hardware.nfc@1.0-service
+    class hal
+    user nfc
+    group nfc
+```
+class 为 hal 的service 会在 on boot 时启动 
+```c
+int main() {
+    ......
+    status = registerPassthroughServiceImplementation<INfc>();
+    status = registerPassthroughServiceImplementation<INqNfc>();
+    ......
+}
+```
+这里注册了两个接口  INfc (AOSP)和 INqNfc(Vendor),  可以找到其 HIDL_FETCH_Ixxx 函数可以看到都是去打开 ID 为 NFC_NCI_HARDWARE_MODULE_ID 这个 moudle ，这两个接口的定义分别是 : 
+```c
+/*  path: hardware/interfaces/nfc/1.0/INfc.hal  */
+
+interface INfc {
+    open(INfcClientCallback clientCallback) generates (NfcStatus status);
+    write(NfcData data) generates (uint32_t retval);
+    coreInitialized(NfcData data) generates (NfcStatus status);
+    prediscover() generates (NfcStatus status);
+    close() generates (NfcStatus status);
+    controlGranted() generates (NfcStatus status);
+    powerCycle() generates (NfcStatus status);
+};
+```
+```c
+/*  path: vendor/nxp/interfaces/opensource/nfc/1.0/INqNfc.hal  */
+
+interface INqNfc {
+    ioctl(uint64_t ioctlType, NfcData inputData) generates(NfcData outputData);
+};
+``` 
+下面主要来看 NFC_NCI_HARDWARE_MODULE_ID 这个 moudle 的定义, 其 code 路径是在 *vendor/nxp/opensource/external/libnfc-nci/halimpl/pn54x* ( 这里不同project 可能不同) ,  该路径下的code 会编译为 **nfc_nci.nqx.default.so**  .      
+ 在 HIDL_FETCH_INfc 及 HIDL_FETCH_INqNfc 中都会调用该 moudle 的 open 接口 : 
+```c
+static int nfc_open(const hw_module_t* module, const char* name,
+        hw_device_t** device)
+{
+    if (strcmp(name, NFC_NCI_CONTROLLER) == 0)
+    {
+       dev = calloc(1, sizeof(pn547_dev_t));
+            /* Common hw_device_t fields */
+            dev->nci_device.common.tag = HARDWARE_DEVICE_TAG;
+            dev->nci_device.common.version = 0x00010000; /* [31:16] major, [15:0] minor */
+            dev->nci_device.common.module = (struct hw_module_t*) module;
+            dev->nci_device.common.close = nfc_close;
+
+            /* NCI HAL method pointers */
+            dev->nci_device.open = hal_open;
+            dev->nci_device.write = hal_write;
+            dev->ioctl = hal_ioctl;
+            dev->nci_device.core_initialized = hal_core_initialized;
+            dev->nci_device.pre_discover = hal_pre_discover;
+            dev->nci_device.close = hal_close;
+            dev->nci_device.control_granted = hal_control_granted;
+            dev->nci_device.power_cycle = hal_power_cycle;
+            dev->check_fw_dwnld_flag = hal_get_fw_dwnld_flag;
+            *device = (hw_device_t*) dev;
+        }
+  ......
+}
+```
+这里会填充一个 pn547_dev_t  结构体， hidl service 中的接口实际上就是调用其成员函数 .关于其中的调用关系后面在来梳理。      
+HIDL Service 在通过 dev 结点来与kernel 中 NFC driver 通信， 这里结点地址是写在config 文件中  
+```c
+# Nfc Device Node name
+NXP_NFC_DEV_NODE="/dev/nq-nci"
+```
+在开启 NFC 时最终调用到  phTmlNfc_i2c_open_and_configure 中打开并保存节点供后续 read/write 使用。    
+ 
+## com.android.nfc
+接下来主继续看 com.android.nfc 进程 ,   code 路径在 */vendor/nxp/opensource*  ,  在 AndroidManifest.xml 中有如下定义 
+```c
+    <application android:name=".NfcApplication"
+                 .......
+                 android:persistent="true"
+                 ......
+    >
+```
+这里 NfcApplication 包含属性 persistent 为 true , 所以它会在开机事由 AM 启动,  其主要任务是创建一个 NfcService 对象 ,  下面简单看一下 NfcService 的初始化 :
+```java
+    public NfcService(Application nfcApplication) {
+
+        mNfcTagService = new TagService();		//提供 Tag 相关接口
+        mNfcAdapter = new NfcAdapterService();	//提供 enable , disable 以及扫描模式等接口
+        mNxpNfcAdapter = new NxpNfcAdapterService();
+        mExtrasService = new NfcAdapterExtrasService();
+        mNxpExtrasService = new NxpNfcAdapterExtrasService();
+        
+        sService = this;
+
+        mScreenStateHelper = new ScreenStateHelper(mContext);	//NFC 会根据屏幕状态改变 discovery 等状态
+        mContentResolver = mContext.getContentResolver();
+        mDeviceHost = new NativeNfcManager(mContext, this);	//JNI 接口
+
+        mNfcUnlockManager = NfcUnlockManager.getInstance();
+
+        if(mInProvisionMode)
+        {
+            /* if device is in provision mode, set this mode at lower layers */
+            mDeviceHost.doSetProvisionMode(mInProvisionMode);
+        }
+
+        mNfcDispatcher = new NfcDispatcher(mContext, mHandoverDataParser, mInProvisionMode,
+                mIsLiveCaseEnabled);		//负责分发各种 event 
+        mP2pLinkManager = new P2pLinkManager(mContext, mHandoverDataParser,
+                mDeviceHost.getDefaultLlcpMiu(), mDeviceHost.getDefaultLlcpRwSize());
+	.......
+
+        mState = NfcAdapter.STATE_OFF;		//初始化状态 STATE_OFF 
+        mIsNdefPushEnabled = mPrefs.getBoolean(PREF_NDEF_PUSH_ON, NDEF_PUSH_ON_DEFAULT);	//Android Beam 状态
+        setBeamShareActivityState(mIsNdefPushEnabled);
+
+        mScreenState = mScreenStateHelper.checkScreenState();
+
+        IntentFilter lsFilter = new IntentFilter(NfcAdapter.ACTION_ADAPTER_STATE_CHANGED);
+        //mContext.registerReceiver(mAlaReceiver, lsFilter);
+        mContext.registerReceiverAsUser(mAlaReceiver, UserHandle.ALL, lsFilter, null, null);
+
+	...... // CARD_EMULATION 相关
+
+        // Make sure this is only called when object construction is complete.
+        ServiceManager.addService(SERVICE_NAME, mNfcAdapter);
+
+        new EnableDisableTask().execute(TASK_BOOT);  // do blocking boot tasks
+
+        initSoundPool();	//初始化 NFC 的提示音
+    }
+```
+在初始化各个成员变量之后 ， 创建一个线程类 EnableDisableTask 执行 TASK_BOOT 参数 : 
+```java
+                case TASK_BOOT:
+		    // 如果上一次关机前NFC 为开启状态则开启 NFC 
+                    if (mPrefs.getBoolean(PREF_NFC_ON, NFC_ON_DEFAULT)) {
+                        mIsTaskBoot = true;
+                        enableInternal();
+                        mIsTaskBoot = false;
+                    } else {
+                        mDeviceHost.checkFirmware();	//这里会检查当前FW的时间戳是否和系统记录的一致，不一致则进行 download FW
+                    }
+                    if (mPrefs.getBoolean(PREF_FIRST_BOOT, true)) {
+                        Log.i(TAG, "First Boot");
+                        mPrefsEditor.putBoolean(PREF_FIRST_BOOT, false);
+                        mPrefsEditor.apply();
+                    }
+                    break;
+```
+到这里 NfcService 的初始化基本结束， 其他具体的各个内部 service 的作用后续在根据流程来介绍。 这里在来大概看一下连接 HIDL Service 的地方， 在 NFC enable 过程中会调用  NativeNfcManager 的 initialize 方法:    
+```java
+enableInternal() 
+	=>	mDeviceHost.initialize()
+		=>  NativeNfcManager : doInitialize 
+			=>  nfcManager_doInitialize()
+				        NfcAdaptation& theInstance = NfcAdaptation::GetInstance();
+        				theInstance.Initialize(); //start GKI, NCI task, NFC task
+				=> NfcAdaptation::Initialize()
+					=> NfcAdaptation::InitializeHalDeviceContext()
+					    // 后面都是调用 mHal 及 INqNfc 的接口
+					    mHal = INfc::getService();
+					    mNqHal = INqNfc::getService();
+```
+
+## NFC driver
+上面可以知道在 HIDL service 中通过 '/dev/nq-nci' 结点来 read / write ， 下面在简单看一下 NFC driver  。 
+```c
+static struct i2c_driver nqx = {
+	.id_table = nqx_id,
+	.probe = nqx_probe,
+	.remove = nqx_remove,
+	.driver = {
+		.owner = THIS_MODULE,
+		.name = "nq-nci",
+		.of_match_table = msm_match_table,
+		.pm = &nfc_pm_ops,
+	},
+};
+
+static const struct of_device_id msm_match_table[] = {
+	{.compatible = "qcom,nq-nci"},
+	{}
+};
+
+static int __init nqx_dev_init(void)
+{
+	return i2c_add_driver(&nqx);
+}
+module_init(nqx_dev_init);
+```
+首先注册 I2C 设备驱动， 在探测到该设备之后 : 
+```c
+static int nqx_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
+{
+	nqx_dev = kzalloc(sizeof(*nqx_dev), GFP_KERNEL);
+	nqx_dev->client = client;
+	......	//填充nqx_dev 及初始化各个gpio 等
+	
+	//注册 nq-nci misc设备， 其中会创建 /dev/nq-nci 结点
+	nqx_dev->nqx_device.minor = MISC_DYNAMIC_MINOR;
+	nqx_dev->nqx_device.name = "nq-nci";
+	nqx_dev->nqx_device.fops = &nfc_dev_fops;
+
+	r = misc_register(&nqx_dev->nqx_device);	
+	.......
+```
+再来看该节点的操作函数，其中主要是掉用I2C接口来与挂在 I2C bus 上的NFC chip 通信。
+```c
+static const struct file_operations nfc_dev_fops = {
+	.owner = THIS_MODULE,
+	.llseek = no_llseek,
+	.read  = nfc_read,
+	.write = nfc_write,
+	.open = nfc_open,
+	.unlocked_ioctl = nfc_ioctl,
+};
+
+static ssize_t nfc_write(struct file *filp, const char __user *buf,
+				size_t count, loff_t *offset)
+{
+	struct nqx_dev *nqx_dev = filp->private_data;
+	tmp = memdup_user(buf, count);
+	ret = i2c_master_send(nqx_dev->client, tmp, count);
+	return ret;
+}
+```
+
+
