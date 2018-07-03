@@ -1,0 +1,50 @@
+---
+layout: post
+title: "NFC NCI"
+category: nfc
+tags: [ nfc]
+catalog: true
+---
+# 1. 概述
+NCI ( NFC Controller Interface ) 是介于 NFCC (NFC Controller ) 和 DH  ( Device Host ) 之间的通讯协议， 类似于蓝牙的 HCI 其定义了chip 和 host 之间的数据收发及其格式。 
+![](/images/nfc/nfc_nci_architecture.png)  
+
+# 2. NCI  架构
+NCI 架构包含3类组件： NCI Core ， Transport Mappings ，NCI modules  
+![](/images/nfc/nfc_nci_architecture2.png)   
+**NCI Core** : 定义了 DH 和 NFCC 之间基本的通信功能 ,  包括 Command, Response,  Notificationand  和 Data Message 的交换。    
+**Transport Mappings** ：根据 DH 和 NFCC 之间的物理连接方式， 将NCI消息适配到相应的物理传输协议中。   
+**NCI modules** ：位于 NCI Core 之上， 每个模块提供特定的功能， 例如提供配置 NFCC， 搜索以及传输 remote NFC device ， 同时提供配置 NFCEE 以及和 NFCEE 通讯的功能。  
+
+NCI 中定义了两种接口 ： RF Interfaces 和 NFCEE Interfaces ， 分别用于 DH 和 remote NFC endpoint 或者 NFCEE 通信 。每一个接口都支持特定的协议(NFC-DEP , ISO-DEP 等 )。 这里的协议实际上是指NFCC与 remote NFCC 或者 NFCEE 之间的通讯协议， 而这部分对于 DH 是不可见的， 因此 NCI 定义了 Interface 的概念。  DH 通过接口来控制对应的协议。
+
+
+# 3. NCI 核心框架
+## 3.1 NCI 消息格式
+NCI 定义了控制消息和数据消息的格式 ：  
+![](/images/nfc/nfc_nci_Common_Packet.png)  
+**MT**( Message Type ) 表示消息类型  
+![](/images/nfc/nfc_nci_Packet_mt.png)  
+**PBF**( Packet Boundary Flag ) 表示分段重组， 如果其被置为 0 ， 代表该消息为一个完整消息或者是分段消息的最后一个 ； 如果其被置为1 ， 代表是分段消息，且不会是最后一个分段消息。   
+
+### 3.1.1 Control Packets
+NCI 控制消息包括 Command, Response,  Notificationand 三种
+![](/images/nfc/nfc_nci_control_exchange.png)  
+其格式为： 
+![](/images/nfc/nfc_nci_control_packet.png)  
+**GID** (Group Identifier ) , 在 NCI 规范中， 将控制消息分为3组 ： NCI Core (0000b) , RF Management (0001b) 和 NFCEE Management (0010b)     
+**OID** (Opcode Identifier) ,  在每个组内在用 OID 来标志一个命令。 
+**L** (Payload Length) , 代表后面 Payload 的长度 ， 控制消息最长可以达到255字节， 一般DH是可以接受这么长的消息，但NFCC可能由于处理几存储的限制无法接受这么长的消息，因为 DH 需对控制消息进行分段。   
+
+### 3.1.2 Control Packets 的流控
+对于控制消息， NCI 只是要求 DH 发送一条 command 之后只有收到 response 之后才能发送一条 command ,  此外 DH 也会维护一个计时器， 如果计时器超时还未收到该command 对应的 response ， DH 将会重发该command 或者发送下一条。
+
+### 3.1.3 Data Packets
+![](/images/nfc/nfc_nci_data_packet.png)  
+**Conn ID** (Connection Identifier) , 代表该数据所属的连接逻辑连接 , NFCC 在收到消息后根据该 ID 来判断该数据的目的地， 进而判断NFCC 在向目的地发送数据时所用的 RF 协议或者 NFCEE 协议 。  
+
+### 3.1.3 Data Packets 的流控
+对于数据消息， NCI 定义了基于 credit 的流控机制， 主要用来控制从 DH 发送给 NFCC 的数据消息。 该流控功能在建立每一条逻辑连接时配置， 起开关是可选的，而每一条逻辑连接的流控设置都是单独的。 当开启流控之后，发送每一个数据包时都需要一个credit 。
+
+
+
