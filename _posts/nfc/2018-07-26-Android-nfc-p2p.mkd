@@ -1,0 +1,524 @@
+---
+layout: post
+title: "Android NFC 文件传输"
+category: nfc
+tags: [ nfc, android]
+catalog: false
+---
+>这里主要来追一下 Android Beam 发送文件的流程       
+
+来看一下 Nfc 的 AndroidManifest.xml   
+```html
+        <activity android:name=".BeamShareActivity"
+            ......
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+``` 
+在共享文件选到 Android Beam 时会启动  BeamShareActivity :   
+```java
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        mUris = new ArrayList<Uri>();
+        mNdefMessage = null;
+        mNfcAdapter = NfcAdapter.getDefaultAdapter(this);
+        mLaunchIntent = getIntent();
+        if (mNfcAdapter == null) {
+            ......
+        } else {
+            // NFC 没打开则先弹出请求打开 NFC 的请求框 
+            if (!mNfcAdapter.isEnabled()) {
+                showNfcDialogAndExit(com.android.nfc.R.string.beam_requires_nfc_enabled);
+            } else {
+                parseShareIntentAndFinish(mLaunchIntent);
+            }
+        }
+    }
+```
+重点在 parseShareIntentAndFinish    
+```java
+    public void parseShareIntentAndFinish(Intent intent) {
+ 	......  //从intent 中获取 uri 
+
+	//创建并填充 BeamShareData 变量
+        BeamShareData shareData = null;
+        UserHandle myUserHandle = new UserHandle(UserHandle.myUserId());
+        if (mUris.size() > 0) {
+            // Uris have our first preference for sharing
+            Uri[] uriArray = new Uri[mUris.size()];
+            int numValidUris = 0;
+            for (Uri uri : mUris) {
+                try {
+                    int uid = ActivityManagerNative.getDefault().getLaunchedFromUid(getActivityToken());
+                    grantUriPermission("com.android.nfc", uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    uriArray[numValidUris++] = uri;
+                    if (DBG) Log.d(TAG, "Found uri: " + uri);
+                } 
+            }
+            if (numValidUris != 0 && numValidUris == mUris.size()) {
+                shareData = new BeamShareData(null, uriArray, myUserHandle, 0);
+            } else {
+                // No uris left
+                shareData = new BeamShareData(null, null, myUserHandle, 0);
+            }
+        } ......
+        mNfcAdapter.invokeBeam(shareData);
+        finish();
+    }
+```
+最后调用 NfcAdapter 的 invokeBeam 方法， 其直接call 到 NFCService 的 invokeBeamInternal 方法中
+```java
+        public void invokeBeamInternal(BeamShareData shareData) {
+            NfcPermissions.enforceAdminPermissions(mContext);
+            Message msg = Message.obtain();
+            msg.what = MSG_INVOKE_BEAM;
+            msg.obj = shareData;
+            mHandler.sendMessageDelayed(msg, INVOKE_BEAM_DELAY_MS);
+        }
+        
+=>           case MSG_INVOKE_BEAM: {
+                    mP2pLinkManager.onManualBeamInvoke((BeamShareData)msg.obj);
+                    break;
+                }        
+```
+再来看 P2pLinkManager.java 中的 onManualBeamInvoke 方法  
+```java
+    public void onManualBeamInvoke(BeamShareData shareData) {
+        synchronized (P2pLinkManager.this)    {
+            ......
+            if (mMessageToSend != null ||
+                    (mUrisToSend != null && mHandoverDataParser.isHandoverSupported())) {
+                mSendState = SEND_STATE_PENDING;
+                mEventListener.onP2pNfcTapRequested();
+                scheduleTimeoutLocked(MSG_WAIT_FOR_LINK_TIMEOUT, WAIT_FOR_LINK_TIMEOUT_MS);
+            }
+        }
+    }
+    
+    // 播放start 的声音， 此外截图并显出出 Android Beam 界面
+     public void onP2pNfcTapRequested() {
+        mNfcService.playSound(NfcService.SOUND_START);
+        mNdefSent = false;
+        mNdefReceived = false;
+        mInDebounce = false;
+
+        mVibrator.vibrate(VIBRATION_PATTERN, -1);
+        if (mSendUi != null) {
+            mSendUi.takeScreenshot();
+            mSendUi.showPreSend(true);     
+```
+到此按下分享中 Android Beam 的动作完成，其中设置状态为SEND_STATE_PENDING ， 填充要发送文件uri ，  并且播放声音以及UI      
+
+继续来看一下之后与 remote device 接触后的动作 ：   
+如果对方也支持 P2P , 底层会检测到 NFC_DEP 的接口 ：   
+*len =  49 <= 61052E01030580FB0100820202232275182C19869E54056A480000003246666D010112020207FF03020013040164070103*      
+简单解析一下 :    
+  NTF		INTF_ACTIVATED		Dis_ID:1 , Intf: NFC_DEP , Proto: NFC_DEP , Techo:A_PASSIVE_LISTEN    
+这里 INTF_ACTIVATED 最终会传个 JNI 层， 忽略中间的一些code  :     
+```c
+    public void onLlcpActivated(byte peerLlcpVersion) {
+                case LINK_STATE_DOWN:
+                    if (mSendState == SEND_STATE_PENDING) {
+                        mSendState = SEND_STATE_SENDING;
+                        mHandler.removeMessages(MSG_WAIT_FOR_LINK_TIMEOUT);
+                        // Immediately try to connect LLCP services
+                        connectLlcpServices();
+                    }
+    void connectLlcpServices() {
+        synchronized (P2pLinkManager.this) {
+            if (mConnectTask != null) {
+                Log.e(TAG, "Still had a reference to mConnectTask!");
+            }
+            mConnectTask = new ConnectTask();
+            mConnectTask.execute();
+        }
+    }                         
+```
+这里新建并启动了一个 ConnectTask  :      
+```c
+    final class ConnectTask extends AsyncTask<Void, Void, Boolean> {
+        protected Boolean doInBackground(Void... params) {
+            synchronized(P2pLinkManager.this) {
+                if (mUrisToSend != null) {
+                    needsHandover = true;
+                }
+            if (needsHandover) {
+                handoverClient = new HandoverClient();
+                    handoverClient.connect();
+                    success = true; 
+            }    
+```
+实质是发送 NFA_P2P_API_CONNECT_EVT 消息给底层来建立连接  ：    
+log : *len =  26 => 0000170520061375726E3A6E66633A736E3A68616E646F766572*
+```c
+00	Data  Conn ID:1 
+0017	Length
+0520	LLCP  Header , DSAP :  01 , Ptype: CONNECT , SAP :20
+06(SN ,Service Name ) 13(Len) 75726E3A6E66633A736E3A68616E646F766572 (urn:nfc:sn:handover)
+```
+DUT 发起连接， remote device 接受连接请求     
+log : *len =   5<= 000002 8191*     Ptype: Connect_Complete, DSAP: 20, SSAP: 11	     
+在 ConnectTask 中会等待连接完成， 之后调用到 onPostExecute   
+```java
+    final class ConnectTask extends AsyncTask<Void, Void, Boolean> {
+        @Override
+        protected void onPostExecute(Boolean result)  {
+                onLlcpServicesConnected();
+        }
+    }        
+            
+    void onLlcpServicesConnected() {
+            mLlcpServicesConnected = true;
+            if (mSendState == SEND_STATE_NEED_CONFIRMATION) {
+		.......
+            } else if (mSendState == SEND_STATE_SENDING) {
+                mEventListener.onP2pResumeSend();
+                sendNdefMessage();
+            } 
+        }
+    void sendNdefMessage() {
+        synchronized (this) {
+            cancelSendNdefMessage();
+            mSendTask = new SendTask();
+            mSendTask.execute();
+        }
+    }        
+```
+这里又建了一个 SendTask 线程 :     
+```c
+    final class SendTask extends AsyncTask<Void, Void, Void> {
+            public Void doInBackground(Void... args) {
+            if (uris != null) {
+                try {
+                    int handoverResult = doHandover(uris, userHandle);
+                    switch (handoverResult) {
+                        case HANDOVER_SUCCESS:
+                            result = true;
+                            break;
+           }
+
+        int doHandover(Uri[] uris, UserHandle userHandle) throws IOException {
+            NdefMessage response = null;
+            BeamManager beamManager = BeamManager.getInstance();
+
+            NdefMessage request = mHandoverDataParser.createHandoverRequestMessage();
+            if (request != null) {
+                if (handoverClient != null) {
+                    response = handoverClient.sendHandoverRequest(request);
+                }
+            }   
+```
+这里可以看到先生成一个 HandoverRequestMessage 在发向 remote 发起请求 ， 来仔细看一下其过程    
+```c
+    public NdefMessage createHandoverRequestMessage() {
+        if (mBluetoothAdapter == null) {
+            return null;
+        }
+
+        NdefRecord[] dataRecords = new NdefRecord[] {
+                createBluetoothOobDataRecord()
+        };
+        return new NdefMessage(
+               createHandoverRequestRecord(),
+                dataRecords);
+   }
+```
+这里会生成一个包含两个 NdefRecord 的 NdefMessage    
+```c
+    // 生成 Handover Request Record
+    NdefRecord createHandoverRequestRecord() {
+        NdefRecord[] messages = new NdefRecord[] {
+                createBluetoothAlternateCarrierRecord(false)
+        };
+
+        NdefMessage nestedMessage = new NdefMessage(createCollisionRecord(), messages);
+
+        byte[] nestedPayload = nestedMessage.toByteArray();
+
+        ByteBuffer payload = ByteBuffer.allocate(nestedPayload.length + 1);
+        payload.put((byte) 0x12);  // connection handover v1.2
+        payload.put(nestedMessage.toByteArray());
+
+        byte[] payloadBytes = new byte[payload.position()];
+        payload.position(0);
+        payload.get(payloadBytes);
+        return new NdefRecord(NdefRecord.TNF_WELL_KNOWN, NdefRecord.RTD_HANDOVER_REQUEST, null,
+                payloadBytes);
+    }
+    
+//生成包含BT mac address 的 record 
+    NdefRecord createBluetoothOobDataRecord() {
+        byte[] payload = new byte[8];
+        payload[0] = (byte) (payload.length & 0xFF);
+        payload[1] = (byte) ((payload.length >> 8) & 0xFF);
+
+        mLocalBluetoothAddress = mBluetoothAdapter.getAddress();
+
+        byte[] addressBytes = addressToReverseBytes(mLocalBluetoothAddress);
+        System.arraycopy(addressBytes, 0, payload, 2, 6);
+
+        return new NdefRecord(NdefRecord.TNF_MIME_MEDIA, TYPE_BT_OOB, new byte[]{'b'}, payload);
+    }
+```
+来看一下实际生成的消息 :      
+log : *len =  73 => 0000464720009102114872129102026372948C5102046163010162005A2008016170706C69636174696F6E2F766E642E626C7565746F6F74682E65702E6F6F6262080030EAF0332222*
+```html
+000046	DATA	Len:0x46
+4720 	Information, DSAP: 11, SSAP: 20
+00	Sequence
+91	MB:1 ME:0 SR:1 TNF:RTD 
+02	Type Len
+11	Payload Len
+4872	Type: Hr  RTD Handover Request type
+payload 
+12  connection handover 版本 v1.2
+	//用于解决可能同时发送 HandoverRequest 时出现冲突， 随机数大的一方作为请求者
+	91	MB:1 ME:0 SR:1 TNF:RTD
+	02	Type Len
+	02	Payload Len
+	6372	Type: cr  RTD COLLISION RESOLUTION
+	948C	两个随机数
+
+	//可选 Carrier 列表 
+	51	MB:0  ME:1 TNF:RTD
+	02	Type Len
+	04	Payload Len
+	6163	Type: ac  RTD Alternative Carrier type
+	payload 
+	01	CARRIER_POWER_STATE_ACTIVE	代表BT是否已经打开
+	01	length of carrier data reference	
+	62	carrier data reference: ID for Bluetooth OOB data record
+	00	Auxiliary data reference count
+
+5A	MB:0  ME:1 SR:1 IL:1 TNF:RF2406 
+20	Type Len
+08	Payload Len
+01	ID len
+6170706C69636174696F6E2F766E642E626C7565746F6F74682E65702E6F6F62	Type : application/vnd.bluetooth.ep.oob 
+62	NDEF ID 'b'
+payload 
+0800  length
+30EAF0332222	BT mac
+```
+这个 NDEF 消息中包含两个 NdefRecord ， 第一个是 HandoverRequest , 第二个是 Carrier (可以是BT 或者 Wifi ) 的信息。 其中第一个 HandoverRequest record  的payload 实际上又是由一个包含两个  NdefRecord 的 NDEF 消息组成，  一个冲突解决的 record 和 一个列出 Carrier 的 record .       
+
+继续来看 remote device 的 response :      
+log :  *len =  66 <= 00003F83110191020A487312D102046163010162005A2008016170706C69636174696F6E2F766E642E626C7565746F6F74682E65702E6F6F626208005C2809CA2222*
+```html
+00003F
+8311	Ptype: Information, DSAP: 20, SSAP: 11	
+01		Sequence
+91		MB:1 ME:0 SR:1 TNF:RTD 
+02		Type Len
+0A		Payload Len
+4873	Type: Hs  RTD Handover Select  type
+Payload
+12		connection handover 版本 v1.2
+	//Carrier 与 request 中的一致 
+	D1	MB=1 ME=1 SR=1 TNF:RTD
+	02	Type Len
+	04	Payload Len
+	6163	Type: ac  RTD Alternative Carrier type
+	01016200
+
+5A	MB:0  ME:1 SR:1 IL:1 TNF:RF2406 
+20	Type Len
+08	Payload Len
+01	ID len
+6170706C69636174696F6E2F766E642E626C7565746F6F74682E65702E6F6F62	Type : application/vnd.bluetooth.ep.oob 
+62	NDEF ID 'b'
+payload 
+0800	length
+5C2809CA2222	BT mac
+```
+这里 Handover Select Record 后面可以跟随 0 个或者多个 NDEF Record , 表示remote 支持哪些 Carrier , 如果是 0个 则代表remote 不支援 request 中的任何  Carrier .     
+
+再来看code 中收到这个消息之后怎么处理 , 这里需要回头在看  sendHandoverRequest  , 其在发送之后会一直等待   Select Msg 返回    
+```c
+    public NdefMessage sendHandoverRequest(NdefMessage msg) throws IOException {
+        ......
+        //发送 HandoverRequest 消息  
+        try {
+            int remoteMiu = sock.();
+            while (offset < buffer.length) {
+                int length = Math.min(buffer.length - offset, remoteMiu);
+                byte[] tmpBuffer = Arrays.copyOfRange(buffer, offset, offset+length);
+                sock.send(tmpBuffer);
+                offset += length;
+            }
+
+            // 等待 select  消息返回
+            byte[] partial = new byte[sock.getLocalMiu()];
+            NdefMessage handoverSelectMsg = null;
+            while (true) {
+                int size = sock.receive(partial);
+                if (size < 0) {
+                    break;
+                }
+                byteStream.write(partial, 0, size);
+                try {
+                    handoverSelectMsg = new NdefMessage(byteStream.toByteArray());
+                    // If we get here, message is complete
+                    break;
+                } catch (FormatException e) {
+                    // Ignore, and try to fetch more bytes
+                }
+            }
+            return handoverSelectMsg;
+        } finally {
+            if (sock != null) {
+		    // 在接收到 select 消息之后会断开连接
+                    sock.close();
+            }
+        }            
+    }
+}
+```
+将 handoverSelectMsg 返回之后由前面的  doHandover  继续处理       
+```c
+        int doHandover(Uri[] uris, UserHandle userHandle) throws IOException {
+            ......
+            if (!beamManager.startBeamSend(mContext,
+                    mHandoverDataParser.getOutgoingHandoverData(response), uris, userHandle)) {
+                return HANDOVER_BUSY;
+            }
+            return HANDOVER_SUCCESS;        	
+```
+其中  mHandoverDataParser.getOutgoingHandoverData(response) 会从 NDEF 消息中解析出 BT Mac 并创建一个 BluetoothHandoverData 对象         
+```java
+    public boolean startBeamSend(Context context,
+                               HandoverDataParser.BluetoothHandoverData outgoingHandoverData,
+                               Uri[] uris, UserHandle userHandle) {
+                mBeamInProgress = true;
+
+        BeamTransferRecord transferRecord = BeamTransferRecord.forBluetoothDevice(
+                outgoingHandoverData.device, outgoingHandoverData.carrierActivating,
+                uris);
+        Intent sendIntent = new Intent(context.getApplicationContext(),
+                BeamSendService.class);
+        sendIntent.putExtra(BeamSendService.EXTRA_BEAM_TRANSFER_RECORD, transferRecord);
+        sendIntent.putExtra(BeamSendService.EXTRA_BEAM_COMPLETE_CALLBACK,
+                new Messenger(mCallback));
+        context.startServiceAsUser(sendIntent, userHandle);
+        return true;
+    }
+```
+这里发送广播给 BeamSendService 这个类      
+```java
+public class BeamSendService extends Service implements BeamTransferManager.Callback {
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        BeamTransferRecord transferRecord;    
+        transferRecord = intent.getParcelableExtra(EXTRA_BEAM_TRANSFER_RECORD)   
+        mCompleteCallback = intent.getParcelableExtra(EXTRA_BEAM_COMPLETE_CALLBACK);
+        if (doTransfer(transferRecord)) {
+            return START_STICKY;
+        } 
+    }
+    
+    boolean doTransfer(BeamTransferRecord transferRecord) {
+        if (createBeamTransferManager(transferRecord)) {
+            // register Beam status receiver
+            mBeamStatusReceiver = new BeamStatusReceiver(this, mTransferManager);
+            registerReceiver(mBeamStatusReceiver, mBeamStatusReceiver.getIntentFilter(),
+                    BeamStatusReceiver.BEAM_STATUS_PERMISSION, new Handler());
+
+            if (transferRecord.dataLinkType == BeamTransferRecord.DATA_LINK_TYPE_BLUETOOTH) {
+                if (mBluetoothAdapter.isEnabled()) {
+                    // Start the transfer
+                    mTransferManager.start();
+                } else {
+                     //如果蓝牙当前没有开启则开启蓝牙， 等待收到开启的广播时会在调用 mTransferManager.start
+                    if (!mBluetoothAdapter.enableNoAutoConnect()) {
+                        Log.e(TAG, "Error enabling Bluetooth.");
+                        mTransferManager = null;
+                        return false;
+                    }
+                    mBluetoothEnabledByNfc = true;
+                    if (DBG) Log.d(TAG, "Queueing out transfer "
+                            + Integer.toString(transferRecord.id));
+                }
+            }
+            return true;
+        }
+        return false;
+    }    
+```
+```java
+public class BeamTransferManager implements Handler.Callback,
+        MediaScannerConnection.OnScanCompletedListener {
+    public void start() {
+        mStartTime = System.currentTimeMillis();
+
+        if (!mIncoming) {
+            if (mDataLinkType == BeamTransferRecord.DATA_LINK_TYPE_BLUETOOTH) {
+                new BluetoothOppHandover(mContext, mRemoteDevice, mUris, mRemoteActivating).start();
+            }
+        }
+    }     
+
+public class BluetoothOppHandover implements Handler.Callback {
+    public void start() {
+    	//如果 remote 蓝牙未开启则等待一小段时间
+        if (mRemoteActivating) {
+            Long timeElapsed = SystemClock.elapsedRealtime() - mCreateTime;
+            if (timeElapsed < REMOTE_BT_ENABLE_DELAY_MS) {
+                mHandler.sendEmptyMessageDelayed(MSG_START_SEND,
+                        REMOTE_BT_ENABLE_DELAY_MS - timeElapsed);
+            } else {
+                // Already waited long enough for BT to come up
+                // - start send.
+                sendIntent();
+            }
+        } else {
+            // Remote BT enabled already, start send immediately
+            sendIntent();
+        }
+    }
+
+   //发送 broadcast 交给 BT 来传输
+    void sendIntent() {
+        Intent intent = new Intent();
+        intent.setPackage("com.android.bluetooth");
+        String mimeType = MimeTypeUtil.getMimeTypeForUri(mContext, mUris.get(0));
+        intent.setType(mimeType);
+        intent.putExtra(BluetoothDevice.EXTRA_DEVICE, mDevice);
+        if (mUris.size() == 1) {
+            intent.setAction(ACTION_HANDOVER_SEND);
+            intent.putExtra(Intent.EXTRA_STREAM, mUris.get(0));
+        } else {
+            intent.setAction(ACTION_HANDOVER_SEND_MULTIPLE);
+            intent.putParcelableArrayListExtra(Intent.EXTRA_STREAM, mUris);
+        }
+        intent.addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
+        mContext.sendBroadcast(intent);
+        complete();
+    }    
+```
+
+传输的状态会由 BT 发送 broadcast 来告知 BeamStatusReceiver ,  取会根据状态来更新 NFC 这边的状态 。    
+```java
+public class BeamStatusReceiver extends BroadcastReceiver {
+
+    public void onReceive(Context context, Intent intent) {
+        String action = intent.getAction();
+        int dataLinkType = intent.getIntExtra(EXTRA_HANDOVER_DATA_LINK_TYPE,
+                BeamTransferManager.DATA_LINK_TYPE_BLUETOOTH);
+
+        if (ACTION_CANCEL_HANDOVER_TRANSFER.equals(action)) {
+            if (mTransferManager != null) {
+                mTransferManager.cancel();
+            }
+        } else if (ACTION_TRANSFER_PROGRESS.equals(action) ||
+                ACTION_TRANSFER_DONE.equals(action) ||
+                ACTION_HANDOVER_STARTED.equals(action)) {
+            handleTransferEvent(intent, dataLinkType);
+        }
+    }
+```

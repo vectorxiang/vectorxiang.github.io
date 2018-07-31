@@ -5,52 +5,6 @@ category: nfc
 tags: [ nfc, android]
 catalog: true
 ---
-## nqnfcinfo
-```c
-service nqnfcinfo /system/vendor/bin/nqnfcinfo
-    class late_start
-    group nfc
-    user system
-    oneshot
-```   
-
-```c
-/*
-  path : /vendor/qcom/proprietary/nqnfc-firmware/nqnfcinfo/src/main.c
-  func : set some property  sys.nfc.nq.chipid , sys.nfc.nq.fwver , persist.nfc.fw.version
-*/
-```
-
-## NfcService
-> /vendor/nxp/opensource/packages/apps/Nfc
-
-```java
-    <application android:name=".NfcApplication"
-                 ......
-                 android:persistent="true"
-```
-
-```java
-/* 构造函数 */
-    public NfcService(Application nfcApplication) {
-        mUserId = ActivityManager.getCurrentUser();
-        mContext = nfcApplication;
-
-        mNfcTagService = new TagService();
-        mNfcAdapter = new NfcAdapterService();
-        mNxpNfcAdapter = new NxpNfcAdapterService();
-        mExtrasService = new NfcAdapterExtrasService();
-        mNxpExtrasService = new NxpNfcAdapterExtrasService();
-      //  mCardEmulationService = new CardEmulationService();
-
-        Log.i(TAG, "Starting NFC service");
-        
-        ......
-        mDeviceHost = new NativeNfcManager(mContext, this);
-        ......
-        new EnableDisableTask().execute(TASK_BOOT);  // do blocking boot tasks
-    }
-```
 先来看 NativeNfcManager ：
 ```java
 public class NativeNfcManager implements DeviceHost {
@@ -82,27 +36,23 @@ jint JNI_OnLoad (JavaVM* jvm, void*)
     return JNI_VERSION_1_6;
 }
 ```
-### enable
+# enable
 ```java
     final class NfcAdapterService extends INfcAdapter.Stub {
         @Override
         public boolean enable() throws RemoteException {
-            NfcPermissions.enforceAdminPermissions(mContext);
-            int val =  mDeviceHost.GetDefaultSE();
-
 	    //保存当前设定的状态值
             saveNfcOnSetting(true);
             new EnableDisableTask().execute(TASK_ENABLE);
             return true;
         }
 ```
-
 ```java
         boolean enableInternal() {
             if (mState == NfcAdapter.STATE_ON) {
                 return true;
             }
-            Log.i(TAG, "Enabling NFC");
+            //这里回发送 NfcAdapter.ACTION_ADAPTER_STATE_CHANGED 广播 ， 通知状态变化 turning on 
             updateState(NfcAdapter.STATE_TURNING_ON);
             
             // 设定 timeout watch dog

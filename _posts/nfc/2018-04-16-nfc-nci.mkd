@@ -1,11 +1,11 @@
 ---
 layout: post
-title: "NFC NCI"
+title: "NFC NCI & NDEF"
 category: nfc
 tags: [ nfc]
 catalog: true
 ---
-# 1. 概述
+# 1. NCI 概述
 NCI ( NFC Controller Interface ) 是介于 NFCC (NFC Controller ) 和 DH  ( Device Host ) 之间的通讯协议， 类似于蓝牙的 HCI 其定义了chip 和 host 之间的数据收发及其格式。 
 ![](/images/nfc/nfc_nci_architecture.png)  
 
@@ -46,5 +46,29 @@ NCI 控制消息包括 Command, Response,  Notificationand 三种
 ### 3.1.3 Data Packets 的流控
 对于数据消息， NCI 定义了基于 credit 的流控机制， 主要用来控制从 DH 发送给 NFCC 的数据消息。 该流控功能在建立每一条逻辑连接时配置， 起开关是可选的，而每一条逻辑连接的流控设置都是单独的。 当开启流控之后，发送每一个数据包时都需要一个credit 。
 
+# 4. NDEF
+NDEF ( NFC Data Exchange Format ) 定义了 NFC 设备之间 或 NFC 设备与 NFC 标签之间的数据交换的格式 。       
 
+## 4.1 NDEF 结构
+一个 NDEF 消息由一个或多个 NDEF Record 组成 ， 其中回根据 Record 中的 MB , ME 来区分是第一个和最后一个 Record ， 当只有一个 Record 时 MB 和 ME 都将为1     
+![](/images/nfc/ndef_record_arcitecture.png)  
+
+## 4.2 Record 结构
+ ![](/images/nfc/ndef_record.png)  
+**MB** 如果设置为1 , 代表该 Record 为 NDEF 中的第一个 Record       
+**ME** 如果设置为1 , 代表该 Record 为 NDEF 中的最后一个 Record       
+**CF**(Chunk Flag) 当要传输的数据非常长时 ，负载数据回被分段装入多个 Record 中，  这些 Record 的 CF 位都将被设置为 1 , 最后一个分段数据 Record CF 位设为 0 表示这是最后一个 Record Chunk 。 此外这些 Chunk Record 必须被完全封装在一个 NDEF 消息中    
+**SR**( Short Record ) 该位设置为1 则代表 Payload Length 用一个字节表示 ,  一般用于长度为 0~256 字节的 Record     
+**IL**( ID_LENGTH ) 表示 Header 中是否包含 ID Length 和 ID 这两个字段    
+**TNF**( Type Name Format )  用于指明Payload的类型  , 后面 TYPE 字段必须符合 TNF 中的设定 ，例如当 TNF 为 0x01 及 NFC Forum Well-Known Type 时 ， Type 字段的取值可以是 文本 、URI 等 RTD 规范中的类型 。      
+ ![](/images/nfc/recorf_tnf.png)  
+**TYPE LENGTH** 代表下面 TYPE 字段的长度    
+**PAYLOAD LENGTH** 代表负载长度 ，当 SR 为 1 时 该字段为 1 字节 ， 当 SR 为 0 时， 该字段为 4 字节     
+**ID LENGTH**	ID 字段的长度    
+**TYPE**	代表负载类型， 如上需要根据 TNF 字段来设定    
+**ID**  ID采用 URI 编码格式， 主要用于 Record 之间相互引用 。例如一封电子邮件中的发信人，收件人，附件等可能分散在不同的 Record 中      
+
+
+
+ 
 
