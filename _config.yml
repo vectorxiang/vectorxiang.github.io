@@ -94,3 +94,5 @@ service-worker: true
 #        href: "http://wepiaofei.github.io/blog/"
 #    }
 #]
+
+theme: jekyll-theme-cayman
