@@ -280,7 +280,7 @@ There are a number of tasks it performs like minification of the JavaScript, com
 **Try to understand code in `_include/` and `_layouts/`, then you can modify Jekyll [Liquid](https://github.com/Shopify/liquid/wiki) template directly to do more creative customization.**
 
 
-#### Header Image
+#### Header Image  
 
 Change header images of any pages or any posts is pretty easy as mentioned above. But, thanks to [issue #6 (in Chinese)](https://github.com/Huxpro/huxpro.github.io/issues/6) asked, **how to make it looks great?**
 
