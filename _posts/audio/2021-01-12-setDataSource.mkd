@@ -1,0 +1,336 @@
+---
+layout: post
+title:  "setDataSource"
+date:   2021-01-12
+categories: [media]
+catalog:    true
+---
+回顾前面在 app 端调用 setDataSource 时最终会调用到 
+frameworks/av/media/libmedia/mediaplayer.cpp
+
+```c++
+status_t MediaPlayer::setDataSource(int fd, int64_t offset, int64_t length)
+{
+    ALOGV("setDataSource(%d, %" PRId64 ", %" PRId64 ")", fd, offset, length);
+    status_t err = UNKNOWN_ERROR;
+
+    const sp<IMediaPlayerService> service(getMediaPlayerService());
+    if (service != 0) {
+        sp<IMediaPlayer> player(service->create(this, mAudioSessionId));
+        if ((NO_ERROR != doSetRetransmitEndpoint(player)) ||
+            (NO_ERROR != player->setDataSource(fd, offset, length))) {
+            player.clear();
+        }
+        err = attachNewPlayer(player);
+    }
+    return err;
+}
+```
+
+这里会通过binder调用到 MediaPlayerService， 而 MediaPlayerService 是 mediaserver 的一部分：
+
+frameworks/av/media/mediaserver/main_mediaserver.cpp
+
+```c++
+
+int main(int argc __unused, char **argv __unused)
+{
+    signal(SIGPIPE, SIG_IGN);
+
+    sp<ProcessState> proc(ProcessState::self());
+    sp<IServiceManager> sm(defaultServiceManager());
+    ALOGI("ServiceManager: %p", sm.get());
+    AIcu_initializeIcuOrDie();
+    MediaPlayerService::instantiate();
+    ResourceManagerService::instantiate();
+    registerExtensions();
+    ::android::hardware::configureRpcThreadpool(16, false);
+    ProcessState::self()->startThreadPool();
+    IPCThreadState::self()->joinThreadPool();
+    ::android::hardware::joinRpcThreadpool();
+}
+```
+
+在来看 service->create(this, mAudioSessionId) ： 
+
+frameworks/av/media/libmediaplayerservice/MediaPlayerService.cpp
+
+```c++
+sp<IMediaPlayer> MediaPlayerService::create(const sp<IMediaPlayerClient>& client,
+        audio_session_t audioSessionId)
+{
+    pid_t pid = IPCThreadState::self()->getCallingPid();
+    int32_t connId = android_atomic_inc(&mNextConnId);
+
+    sp<Client> c = new Client(
+            this, pid, connId, client, audioSessionId,
+            IPCThreadState::self()->getCallingUid());
+
+    ALOGV("Create new client(%d) from pid %d, uid %d, ", connId, pid,
+         IPCThreadState::self()->getCallingUid());
+
+    wp<Client> w = c;
+    {
+        Mutex::Autolock lock(mLock);
+        mClients.add(w);
+    }
+    return c;
+}
+```
+
+这里会创建了一个MediaPlayerService::Client实例并保存到service 中的 mClients 中， 且这里创建的client 等同于返回的 IMediaPlayer ， 后续对 IMediaPlayer 的操作实际是调用 MediaPlayerService::Client 的方法。
+
+
+
+下面继续看 player->setDataSource(fd, offset, length) 
+
+```c++
+status_t MediaPlayerService::Client::setDataSource(int fd, int64_t offset, int64_t length)
+{
+    ALOGV("setDataSource fd=%d, offset=%" PRId64 ", length=%" PRId64 "", fd, offset, length);
+    struct stat sb;
+    int ret = fstat(fd, &sb);
+
+    ......
+
+    player_type playerType = MediaPlayerFactory::getPlayerType(this,
+                                                               fd,
+                                                               offset,
+                                                               length);
+    sp<MediaPlayerBase> p = setDataSource_pre(playerType);
+    if (p == NULL) {
+        return NO_INIT;
+    }
+
+    // now set data source
+    return mStatus = setDataSource_post(p, p->setDataSource(fd, offset, length));
+}
+```
+
+## MediaPlayerFactory::getPlayerType
+
+frameworks/av/media/libmediaplayerservice/MediaPlayerFactory.cpp
+
+```c++
+player_type MediaPlayerFactory::getPlayerType(const sp<IMediaPlayer>& client,
+                                              int fd,
+                                              int64_t offset,
+                                              int64_t length) {
+    GET_PLAYER_TYPE_IMPL(client, fd, offset, length);
+}
+
+#define GET_PLAYER_TYPE_IMPL(a...)                      \
+    Mutex::Autolock lock_(&sLock);                      \
+                                                        \
+    player_type ret = STAGEFRIGHT_PLAYER;               \
+    float bestScore = 0.0;                              \
+                                                        \
+    for (size_t i = 0; i < sFactoryMap.size(); ++i) {   \
+                                                        \
+        IFactory* v = sFactoryMap.valueAt(i);           \
+        float thisScore;                                \
+        CHECK(v != NULL);                               \
+        thisScore = v->scoreFactory(a, bestScore);      \
+        if (thisScore > bestScore) {                    \
+            ret = sFactoryMap.keyAt(i);                 \
+            bestScore = thisScore;                      \
+        }                                               \
+    }                                                   \
+                                                        \
+    if (0.0 == bestScore) {                             \
+        ret = getDefaultPlayerType();                   \
+    }                                                   \
+                                                        \
+    return ret;
+```
+
+这里主要是用来选择播放器，具体是通过 for 循环在已注册的播放器中来选择，而手边的code 只注册了 NuPlayer 所以只会选择 Nuplayer , 厂商如果要自定义 player ，可以在这里添加。
+
+## setDataSource_pre
+
+```c++
+sp<MediaPlayerBase> MediaPlayerService::Client::setDataSource_pre(
+        player_type playerType)
+{
+    ALOGV("player type = %d", playerType);
+
+    // create the right type of player
+    sp<MediaPlayerBase> p = createPlayer(playerType);
+    if (p == NULL) {
+        return p;
+    }
+	......
+
+    if (!p->hardwareOutput()) {
+        mAudioOutput = new AudioOutput(mAudioSessionId, IPCThreadState::self()->getCallingUid(),
+                mPid, mAudioAttributes, mAudioDeviceUpdatedListener);
+        static_cast<MediaPlayerInterface*>(p.get())->setAudioSink(mAudioOutput);
+    }
+
+    return p;
+}
+```
+
+这里的 createPlayer 最后会调用到 NuPlayerFactory：createPlayer 
+
+frameworks/av/media/libmediaplayerservice/MediaPlayerFactory.cpp
+
+```c++
+    virtual sp<MediaPlayerBase> createPlayer(pid_t pid) {
+        ALOGV(" create NuPlayer");
+        return new NuPlayerDriver(pid);
+    }
+```
+
+所以 MediaServer 会为每个 client 创建一个 NuPlayerDriver , 而 NuPlayerDriver 实际上只是 NuPlayer 的一层封装
+
+frameworks/av/media/libmediaplayerservice/nuplayer/NuPlayerDriver.cpp
+
+```c++
+NuPlayerDriver::NuPlayerDriver(pid_t pid)
+    : mState(STATE_IDLE),
+      mIsAsyncPrepare(false),
+      mAsyncResult(UNKNOWN_ERROR),
+      mSetSurfaceInProgress(false),
+      mDurationUs(-1),
+      mPositionUs(-1),
+      mSeekInProgress(false),
+      mPlayingTimeUs(0),
+      mRebufferingTimeUs(0),
+      mRebufferingEvents(0),
+      mRebufferingAtExit(false),
+      mLooper(new ALooper),
+      mMediaClock(new MediaClock),
+      mPlayer(AVNuFactory::get()->createNuPlayer(pid, mMediaClock)),
+      mPlayerFlags(0),
+      mMetricsItem(NULL),
+      mClientUid(-1),
+      mAtEOS(false),
+      mLooping(false),
+      mAutoLoop(false) {
+    ALOGD("NuPlayerDriver(%p) created, clientPid(%d)", this, pid);
+    mLooper->setName("NuPlayerDriver Looper");
+
+    mMediaClock->init();
+
+    // set up an analytics record
+    mMetricsItem = mediametrics::Item::create(kKeyPlayer);
+
+    mLooper->start(
+            false, /* runOnCallingThread */
+            true,  /* canCallJava */
+            PRIORITY_AUDIO);
+
+    mLooper->registerHandler(mPlayer);
+
+    mPlayer->init(this);
+}
+```
+
+内部会在 new 一个 NuPlayer 并设置 NuPlayer 的 driver 为自己。
+
+## p->setDataSource(fd, offset, length)
+
+这里p 是上面获取到的 NuPlayerDriver ,这里主要流程是 
+
+frameworks/av/media/libmediaplayerservice/nuplayer/NuPlayerDriver.cpp
+
+```c++
+status_t NuPlayerDriver::setDataSource(int fd, int64_t offset, int64_t length) {
+    ALOGV("setDataSource(%p) file(%d)", this, fd);
+    Mutex::Autolock autoLock(mLock);
+
+    if (mState != STATE_IDLE) {
+        return INVALID_OPERATION;
+    }
+
+    mState = STATE_SET_DATASOURCE_PENDING;
+
+    mPlayer->setDataSourceAsync(fd, offset, length);
+
+    while (mState == STATE_SET_DATASOURCE_PENDING) {
+        mCondition.wait(mLock);
+    }
+
+    AVNuUtils::get()->printFileName(fd);
+    return mAsyncResult;
+}
+```
+
+调用到 NuPlayer:setDataSourceAsync , 并等待状态切换
+
+frameworks/av/media/libmediaplayerservice/nuplayer/NuPlayer.cpp
+
+```c++
+void NuPlayer::setDataSourceAsync(int fd, int64_t offset, int64_t length) {
+    sp<AMessage> msg = new AMessage(kWhatSetDataSource, this);
+
+    sp<AMessage> notify = new AMessage(kWhatSourceNotify, this);
+
+    sp<GenericSource> source =
+            new GenericSource(notify, mUIDValid, mUID, mMediaClock);
+
+    ALOGV("setDataSourceAsync fd %d/%lld/%lld source: %p",
+            fd, (long long)offset, (long long)length, source.get());
+
+    status_t err = source->setDataSource(fd, offset, length);
+
+    if (err != OK) {
+        ALOGE("Failed to set data source!");
+        source = NULL;
+    }
+
+    msg->setObject("source", source);
+    msg->post();
+    mDataSourceType = DATA_SOURCE_TYPE_GENERIC_FD;
+}
+```
+
+这里会发送一个kWhatSetDataSource 参数包含一个 设置好的 GenericSource ， 处理是在 NuPlayer 中: 
+
+```c++
+void NuPlayer::onMessageReceived(const sp<AMessage> &msg) {
+    switch (msg->what()) {
+        case kWhatSetDataSource:
+        {
+            ALOGV("kWhatSetDataSource");
+
+            CHECK(mSource == NULL);
+
+            status_t err = OK;
+            sp<RefBase> obj;
+            CHECK(msg->findObject("source", &obj));
+            if (obj != NULL) {
+                Mutex::Autolock autoLock(mSourceLock);
+                mSource = static_cast<Source *>(obj.get());
+            } else {
+                err = UNKNOWN_ERROR;
+            }
+
+            CHECK(mDriver != NULL);
+            //升级强指针
+            sp<NuPlayerDriver> driver = mDriver.promote();
+            if (driver != NULL) {
+                driver->notifySetDataSourceCompleted(err);
+            }
+            break;
+        }
+```
+
+NuPlayer 中将 source 保存下来，并通知 driver ， 回到 NuPlayerDriver :
+
+```c++
+void NuPlayerDriver::notifySetDataSourceCompleted(status_t err) {
+    Mutex::Autolock autoLock(mLock);
+
+    CHECK_EQ(mState, STATE_SET_DATASOURCE_PENDING);
+
+    mAsyncResult = err;
+    mState = (err == OK) ? STATE_UNPREPARED : STATE_IDLE;
+    mCondition.broadcast();
+}
+```
+
+
+
+总结一下，setDataSource 的主要工作是在 MediaServer 中创建了一个 NuPlayerDriver 对象， 其中会包一个 NuPlayer ， 而在 NuPlayer 中会保存 media file 信息的 GenericSource 对象 ,  此时 driver 中的 state 变为 STATE_UNPREPARED 。

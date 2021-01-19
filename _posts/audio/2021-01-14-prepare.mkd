@@ -1,0 +1,291 @@
+---
+layout: post
+title:  "prepare"
+date:   2021-01-14
+categories: [media]
+catalog:    true 
+---
+回顾之前的内容， app 在调用 prepare 最后会到这里：
+
+frameworks/av/media/libmedia/mediaplayer.cpp
+
+```c++
+status_t MediaPlayer::prepare()
+{
+    ALOGV("prepare");
+    Mutex::Autolock _l(mLock);
+    mLockThreadId = getThreadId();
+    if (mPrepareSync) {
+        mLockThreadId = 0;
+        return -EALREADY;
+    }
+    mPrepareSync = true;
+    status_t ret = prepareAsync_l();
+
+    if (mPrepareSync) {
+        mSignal.wait(mLock);  // wait for prepare done
+        mPrepareSync = false;
+    }
+    ALOGV("prepare complete - status=%d", mPrepareStatus);
+    mLockThreadId = 0;
+    return mPrepareStatus;
+}
+
+status_t MediaPlayer::prepareAsync_l()
+{
+    if ( (mPlayer != 0) && ( mCurrentState & (MEDIA_PLAYER_INITIALIZED | MEDIA_PLAYER_STOPPED) ) ) {
+        if (mAudioAttributesParcel != NULL) {
+            mPlayer->setParameter(KEY_PARAMETER_AUDIO_ATTRIBUTES, *mAudioAttributesParcel);
+        } else {
+            mPlayer->setAudioStreamType(mStreamType);
+        }
+        mCurrentState = MEDIA_PLAYER_PREPARING;
+        return mPlayer->prepareAsync();
+    }
+    ALOGE("prepareAsync called in state %d, mPlayer(%p)", mCurrentState, mPlayer.get());
+    return INVALID_OPERATION;
+}
+```
+
+这里主要有两个调用 ： setAudioStreamType 和 prepareAsync ， 根据前面的study 知道这里 mPlayer 就是 MediaPlayerService::Client 
+
+frameworks/av/media/libmediaplayerservice/MediaPlayerService.cpp
+
+```c++
+status_t MediaPlayerService::Client::setAudioStreamType(audio_stream_type_t type)
+{
+    ALOGV("[%d] setAudioStreamType(%d)", mConnId, type);
+    // TODO: for hardware output, call player instead
+    Mutex::Autolock l(mLock);
+    if (mAudioOutput != 0) mAudioOutput->setAudioStreamType(type);
+    return NO_ERROR;
+}
+
+status_t MediaPlayerService::Client::prepareAsync()
+{
+    ALOGV("[%d] prepareAsync", mConnId);
+    sp<MediaPlayerBase> p = getPlayer();
+    if (p == 0) return UNKNOWN_ERROR;
+    status_t ret = p->prepareAsync();
+    return ret;
+}
+```
+
+重点看下面的方法， 其中 getPlayer 获取到的就是前面创建的 NuPlayerDriver 
+
+```c++
+status_t NuPlayerDriver::prepareAsync() {
+    ALOGV("prepareAsync(%p)", this);
+    Mutex::Autolock autoLock(mLock);
+
+    switch (mState) {
+        case STATE_UNPREPARED:
+            mState = STATE_PREPARING;
+            mIsAsyncPrepare = true;
+            mPlayer->prepareAsync();
+            return OK;
+		......
+    };
+}
+```
+
+mPlayer 就是 NuPlayer  :
+
+```c++
+void NuPlayer::prepareAsync() {
+    ALOGV("prepareAsync");
+
+    (new AMessage(kWhatPrepare, this))->post();
+}
+
+void NuPlayer::onMessageReceived(const sp<AMessage> &msg) {
+    switch (msg->what()) {
+        case kWhatPrepare:
+        {
+            ALOGV("onMessageReceived kWhatPrepare");
+
+            mSource->prepareAsync();
+            break;
+        }
+```
+
+这里的 mSource 就是在 setDataSource 中保存的 GenericSource 对象 
+
+```c++
+void NuPlayer::GenericSource::prepareAsync() {
+    Mutex::Autolock _l(mLock);
+    ALOGV("prepareAsync: (looper: %d)", (mLooper != NULL));
+
+    if (mLooper == NULL) {
+        mLooper = new ALooper;
+        mLooper->setName("generic");
+        mLooper->start();
+
+        mLooper->registerHandler(this);
+    }
+
+    sp<AMessage> msg = new AMessage(kWhatPrepareAsync, this);
+    msg->post();
+}
+```
+
+最后调用的是 NuPlayer::GenericSource::onPrepareAsync()
+
+```c++
+void NuPlayer::GenericSource::onPrepareAsync() {
+    mDisconnectLock.lock();
+    ALOGV("onPrepareAsync: mDataSource: %d", (mDataSource != NULL));
+
+    // delayed data source creation
+    if (mDataSource == NULL) {
+        // set to false first, if the extractor
+        // comes back as secure, set it to true then.
+        mIsSecure = false;
+		//本地视频, mUri没有赋值
+        if (!mUri.empty()) {
+ 			.......
+        } else {
+            if (property_get_bool("media.stagefright.extractremote", true) &&
+                    !PlayerServiceFileSource::requiresDrm(
+                            mFd.get(), mOffset, mLength, nullptr /* mime */)) {
+                sp<IBinder> binder =
+                        defaultServiceManager()->getService(String16("media.extractor"));
+                if (binder != nullptr) {
+                    ALOGD("FileSource remote");
+                    sp<IMediaExtractorService> mediaExService(
+                            interface_cast<IMediaExtractorService>(binder));
+                    sp<IDataSource> source;
+                    mediaExService->makeIDataSource(base::unique_fd(dup(mFd.get())), mOffset, mLength, &source);
+                    ALOGV("IDataSource(FileSource): %p %d %lld %lld",
+                            source.get(), mFd.get(), (long long)mOffset, (long long)mLength);
+                    if (source.get() != nullptr) {
+                        mDataSource = CreateDataSourceFromIDataSource(source);
+                    } else {
+                        ALOGW("extractor service cannot make data source");
+                    }
+                } else {
+                    ALOGW("extractor service not running");
+                }
+            }
+            if (mDataSource == nullptr) {
+                ......
+            }
+        }
+
+        if (mDataSource == NULL) {
+            ALOGE("Failed to create data source!");
+            mDisconnectLock.unlock();
+            notifyPreparedAndCleanup(UNKNOWN_ERROR);
+            return;
+        }
+    }
+
+
+```
+
+先截取一部分来分析， 首先获取 MediaExtractorService 的代理， 这里 MediaExtractorService 是一个单独的 service ， 通过它最后生成这个 mDataSource ， 其中会包含视频源的 fd .
+
+
+
+继续来看 NuPlayer::GenericSource::onPrepareAsync  剩下的部分
+
+```c++
+    if (mDataSource->flags() & DataSource::kIsCachingDataSource) {
+        mCachedSource = static_cast<NuCachedSource2 *>(mDataSource.get());
+    }
+
+    mDisconnectLock.unlock();
+
+    // For cached streaming cases, we need to wait for enough
+    // buffering before reporting prepared.
+    mIsStreaming = (mCachedSource != NULL);
+
+    // init extractor from data source
+    status_t err = initFromDataSource();
+
+    if (err != OK) {
+        ALOGE("Failed to init from data source!");
+        notifyPreparedAndCleanup(err);
+        return;
+    }
+
+    if (mVideoTrack.mSource != NULL) {
+        sp<MetaData> meta = getFormatMeta_l(false /* audio */);
+        sp<AMessage> msg = new AMessage;
+        err = convertMetaDataToMessage(meta, &msg);
+        if(err != OK) {
+            notifyPreparedAndCleanup(err);
+            return;
+        }
+        notifyVideoSizeChanged(msg);
+    }
+
+    notifyFlagsChanged(
+            // FLAG_SECURE will be known if/when prepareDrm is called by the app
+            // FLAG_PROTECTED will be known if/when prepareDrm is called by the app
+            FLAG_CAN_PAUSE |
+            FLAG_CAN_SEEK_BACKWARD |
+            FLAG_CAN_SEEK_FORWARD |
+            FLAG_CAN_SEEK);
+
+    finishPrepareAsync();
+
+    ALOGV("onPrepareAsync: Done");
+}
+```
+这里重点是 initFromDataSource() ，其中会调用 MediaExtractorService 的接口解析 mDataSource ， 流程比较长放在下一篇分析。
+
+在获取到 MetaData 之后， 将 video 的 size 信息更新到 NuPlayer 中并进一步传递到 MeidaPlayer 中 ， 最后是  finishPrepareAsync 
+
+```c++
+void NuPlayer::GenericSource::finishPrepareAsync() {
+    ALOGV("finishPrepareAsync");
+
+    status_t err = startSources();
+    if (err != OK) {
+        ALOGE("Failed to init start data source!");
+        notifyPreparedAndCleanup(err);
+        return;
+    }
+
+    if (mIsStreaming) {
+        mCachedSource->resumeFetchingIfNecessary();
+        mPreparing = true;
+        schedulePollBuffering();
+    } else {
+        notifyPrepared();
+    }
+
+    if (mAudioTrack.mSource != NULL) {
+        postReadBuffer(MEDIA_TRACK_TYPE_AUDIO);
+    }
+
+    if (mVideoTrack.mSource != NULL) {
+        postReadBuffer(MEDIA_TRACK_TYPE_VIDEO);
+    }
+}
+```
+
+主要来看 notifyPrepared() 
+
+```c++
+status_t NuPlayer::GenericSource::startSources() {
+    // Start the selected A/V tracks now before we start buffering.
+    // Widevine sources might re-initialize crypto when starting, if we delay
+    // this to start(), all data buffered during prepare would be wasted.
+    // (We don't actually start reading until start().)
+    //
+    // TODO: this logic may no longer be relevant after the removal of widevine
+    // support
+    if (mAudioTrack.mSource != NULL && mAudioTrack.mSource->start() != OK) {
+        ALOGE("failed to start audio track!");
+        return UNKNOWN_ERROR;
+    }
+    if (mVideoTrack.mSource != NULL && mVideoTrack.mSource->start() != OK) {
+        ALOGE("failed to start video track!");
+        return UNKNOWN_ERROR;
+    }
+
+    return OK;
+}
+```

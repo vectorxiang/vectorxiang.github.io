@@ -1,0 +1,315 @@
+---
+layout: post
+title:  "extractors"
+date:   2021-01-15
+categories: [media]
+catalog:    true  
+---
+frameworks/av/media/extractors下每个目录都会生成对应的so，eg: libmp4extractor 、 libaacextractor 、 libmpeg2extractor 等等
+
+
+
+这些so最终都在frameworks/av/apex/Android.bp中被编译成"com.android.media"（apex）
+
+```
+apex_defaults {
+    name: "com.android.media-defaults",
+    updatable: true,
+    java_libs: ["updatable-media"],
+    multilib: {
+        first: {
+            // Extractor process runs only with the primary ABI.
+            native_shared_libs: [
+                // Extractor plugins
+                "libaacextractor",
+                "libamrextractor",
+                "libflacextractor",
+                "libmidiextractor",
+                "libmkvextractor",
+                "libmp3extractor",
+                "libmp4extractor",
+                "libmpeg2extractor",
+                "liboggextractor",
+                "libwavextractor",
+            ],
+        },
+    },
+    prebuilts: [
+        "mediaextractor.policy",
+        "code_coverage.policy",
+        "crash_dump.policy",
+    ],
+    key: "com.android.media.key",
+    certificate: ":com.android.media.certificate",
+
+    // Use a custom AndroidManifest.xml used for API targeting.
+    androidManifest: ":com.android.media-androidManifest",
+
+    // IMPORTANT: For the APEX to be installed on Android 10 (API 29),
+    // min_sdk_version should be 29. This enables the build system to make
+    // sure the package compatible to Android 10 in two ways:
+    // - build the APEX package compatible to Android 10
+    //   so that the package can be installed.
+    // - build artifacts (lib/javalib/bin) against Android 10 SDK
+    //   so that the artifacts can run.
+    min_sdk_version: "29",
+}
+
+apex {
+    name: "com.android.media",
+    manifest: "manifest.json",
+    defaults: ["com.android.media-defaults"],
+}
+```
+
+本地so存放在: apex/com.android.media/lib64/extractors 目录下
+
+
+
+在 MediaExtractorService 的实例化时会去加载 extractors
+
+```c++
+MediaExtractorService::MediaExtractorService() {
+    MediaExtractorFactory::LoadExtractors();
+}
+```
+
+```c++
+void MediaExtractorFactory::LoadExtractors() {
+    Mutex::Autolock autoLock(gPluginMutex);
+
+    if (gPluginsRegistered) {
+        return;
+    }
+	//默认为 false
+    gIgnoreVersion = property_get_bool("debug.extractor.ignore_version", false);
+
+    std::shared_ptr<std::list<sp<ExtractorPlugin>>> newList(new std::list<sp<ExtractorPlugin>>());
+
+    android_namespace_t *mediaNs = android_get_exported_namespace("com_android_media");
+    if (mediaNs != NULL) {
+        const android_dlextinfo dlextinfo = {
+            .flags = ANDROID_DLEXT_USE_NAMESPACE,
+            .library_namespace = mediaNs,
+        };
+        RegisterExtractors("/apex/com.android.media/lib64/extractors", &dlextinfo, *newList);
+    } else {
+        ALOGE("couldn't find media namespace.");
+    }
+
+    RegisterExtractors("/system/lib64/extractors", NULL, *newList);
+	//qcom 的 libmmparserextractor.so 会放在这里
+    RegisterExtractors("/system_ext/lib64/extractors", NULL, *newList);
+
+    newList->sort(compareFunc);
+    gPlugins = newList;
+
+    for (auto it = gPlugins->begin(); it != gPlugins->end(); ++it) {
+        if ((*it)->def.def_version == EXTRACTORDEF_VERSION_NDK_V2) {
+            for (size_t i = 0;; i++) {
+                const char* ext = (*it)->def.u.v3.supported_types[i];
+                if (ext == nullptr) {
+                    break;
+                }
+                gSupportedExtensions.push_back(std::string(ext));
+            }
+        }
+    }
+
+    gPluginsRegistered = true;
+}
+```
+
+在我的手机上这里会加载 /apex/com.android.media/lib64/extractors 和 /system_ext/lib64/extractors 下面的so ,  后者是 qcom 的 mmparserextractor , 在来看一下加载的方式：
+
+```c++
+void MediaExtractorFactory::RegisterExtractors(
+        const char *libDirPath, const android_dlextinfo* dlextinfo,
+        std::list<sp<ExtractorPlugin>> &pluginList) {
+    ALOGV("search for plugins at %s", libDirPath);
+	// 打开so所在的目录
+    DIR *libDir = opendir(libDirPath);
+    if (libDir) {
+        struct dirent* libEntry;
+        while ((libEntry = readdir(libDir))) {
+            if (libEntry->d_name[0] == '.') {
+                continue;
+            }
+            String8 libPath = String8(libDirPath) + "/" + libEntry->d_name;
+            if (!libPath.contains("extractor.so")) {
+                continue;
+            }
+            //打开 lib 
+            void *libHandle = android_dlopen_ext(
+                    libPath.string(),
+                    RTLD_NOW | RTLD_LOCAL, dlextinfo);
+			//获取 GETEXTRACTORDEF 函数句柄
+            GetExtractorDef getDef =
+                (GetExtractorDef) dlsym(libHandle, "GETEXTRACTORDEF");
+
+            ALOGV("registering sniffer for %s", libPath.string());
+            //将新的ExtractorPlugin 放在 pluginList 尾部， 其中会检查同一个 extractor的不同版本
+            RegisterExtractor(
+                    new ExtractorPlugin(getDef(), libHandle, libPath), pluginList);
+        }
+        closedir(libDir);
+    } else {
+        ALOGE("couldn't opendir(%s)", libDirPath);
+    }
+}
+```
+
+这里从 lib 中拿到 GETEXTRACTORDEF  函数最后获取到的是 ExtractorDef 结构体
+
+```c++
+struct ExtractorDef {
+    // version number of this structure
+    const uint32_t def_version;
+
+    // A unique identifier for this extractor.
+    // See below for a convenience macro to create this from a string.
+    media_uuid_t extractor_uuid;
+
+    // Version number of this extractor. When two extractors with the same
+    // uuid are encountered, the one with the largest version number will
+    // be used.
+    const uint32_t extractor_version;
+
+    // a human readable name
+    const char *extractor_name;
+
+    union {
+        struct {
+            SnifferFunc sniff;
+        } v2;
+        struct {
+            SnifferFunc sniff;
+            // a NULL terminated list of container mime types and/or file extensions
+            // that this extractor supports
+            const char **supported_types;
+        } v3;
+    } u;
+};
+```
+
+其中包含这个 extractor 的 版本/名称/sniff 方法等， 然后再来看 ExtractorPlugin ，这是对 ExtractorDef 的一层封装，其中也会保存 lib 的句柄和 路径。
+
+```c++
+struct ExtractorPlugin : public RefBase {
+    ExtractorDef def;
+    void *libHandle;
+    String8 libPath;
+    String8 uuidString;
+
+    ExtractorPlugin(ExtractorDef definition, void *handle, String8 &path)
+        : def(definition), libHandle(handle), libPath(path) {
+        for (size_t i = 0; i < sizeof ExtractorDef::extractor_uuid; i++) {
+            uuidString.appendFormat("%02x", def.extractor_uuid.b[i]);
+        }
+    }
+    ~ExtractorPlugin() {
+        if (libHandle != nullptr) {
+            ALOGV("closing handle for %s %d", libPath.c_str(), def.extractor_version);
+            dlclose(libHandle);
+        }
+    }
+};
+```
+
+
+
+以 MP4 Extractor 为例子
+
+frameworks/av/media/extractors/mp4/MPEG4Extractor.cpp
+
+```c++
+extern "C" {
+// This is the only symbol that needs to be exported
+__attribute__ ((visibility ("default")))
+ExtractorDef GETEXTRACTORDEF() {
+    return {
+        EXTRACTORDEF_VERSION,
+        UUID("27575c67-4417-4c54-8d3d-8e626985a164"),
+        2, // version
+        "MP4 Extractor",
+        { .v3 = {Sniff, extensions} },
+    };
+}
+
+} // extern "C"
+
+static const char *extensions[] = {
+    "3g2",
+    "3ga",
+    "3gp",
+    "3gpp",
+    "3gpp2",
+    "m4a",
+    "m4r",
+    "m4v",
+    "mov",
+    "mp4",
+    "qt",
+    NULL
+};
+
+static CreatorFunc Sniff(
+        CDataSource *source, float *confidence, void **,
+        FreeMetaFunc *) {
+    DataSourceHelper helper(source);
+    if (BetterSniffMPEG4(&helper, confidence)) {
+        return CreateExtractor;
+    }
+
+    if (LegacySniffMPEG4(&helper, confidence)) {
+        ALOGW("Identified supported mpeg4 through LegacySniffMPEG4.");
+        return CreateExtractor;
+    }
+
+    return NULL;
+}
+```
+
+这里涉及到相关的封装方法 ： 
+
+MP4文件、MOV文件和3GP文件，这三种媒体文件格式采用了相同的封装格式，其基本的组成单元是box。“ftyp”就是整个文件的第一个box，通过判断该box来确定文件的类型， 具体的 ftyp 类型可以参考
+
+[http://www.ftyps.com/]: http://www.ftyps.com/
+
+直接来看 LegacySniffMPEG4 会比较简单， 匹配固定的 ftyp 类型，如果匹配成功则返回 true ， 并将分数设置为0.4
+
+```c++
+static bool LegacySniffMPEG4(DataSourceHelper *source, float *confidence) {
+    uint8_t header[8];
+
+    ssize_t n = source->readAt(4, header, sizeof(header));
+    if (n < (ssize_t)sizeof(header)) {
+        return false;
+    }
+
+    if (!memcmp(header, "ftyp3gp", 7) || !memcmp(header, "ftypmp42", 8)
+        || !memcmp(header, "ftyp3gr6", 8) || !memcmp(header, "ftyp3gs6", 8)
+        || !memcmp(header, "ftyp3ge6", 8) || !memcmp(header, "ftyp3gg6", 8)
+        || !memcmp(header, "ftypisom", 8) || !memcmp(header, "ftypM4V ", 8)
+        || !memcmp(header, "ftypM4A ", 8) || !memcmp(header, "ftypf4v ", 8)
+        || !memcmp(header, "ftypkddi", 8) || !memcmp(header, "ftypM4VP", 8)
+        || !memcmp(header, "ftypmif1", 8) || !memcmp(header, "ftypheic", 8)
+        || !memcmp(header, "ftypmsf1", 8) || !memcmp(header, "ftyphevc", 8)) {
+        *confidence = 0.4;
+
+        return true;
+    }
+
+    return false;
+}
+```
+
+另外看一下 Sniff 函数的返回值 ：
+
+```c++
+static CMediaExtractor* CreateExtractor(CDataSource *source, void *) {
+    return wrap(new MPEG4Extractor(new DataSourceHelper(source)));
+}
+```
+
+可以看到这里返回的是一个 MPEG4Extractor 的实例。
